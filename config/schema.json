@@ -1,0 +1,232 @@
+{
+  "$version": "1.0.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opc-server.local/config.schema.json",
+  "title": "OPC UA Server Configuration",
+  "description": "Схема конфигурации сервера OPC UA",
+  "type": "object",
+  "required": ["app", "database", "server"],
+  "additionalProperties": false,
+  "properties": {
+    "app": {
+      "type": "object",
+      "required": ["name", "version", "namespace_uri"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Отображаемое имя сервера"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Версия в формате semver (например, 1.0.0)"
+        },
+        "namespace_uri": {
+          "type": "string",
+          "format": "uri",
+          "description": "URI пространства имен OPC UA"
+        },
+        "time_version": {
+          "type": "string",
+          "description": "Версия по дате (например, 01.2022)"
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "required": ["endpoint"],
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "pattern": "^opc\\.tcp://[0-9a-zA-Z.]+:[0-9]+/$",
+          "description": "Конечная точка OPC UA"
+        },
+        "bind_address": {
+          "type": "string",
+          "default": "0.0.0.0",
+          "description": "IP адрес для прослушивания"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 4840,
+          "description": "Порт сервера"
+        },
+        "security": {
+          "type": "object",
+          "properties": {
+            "enable_encryption": {
+              "type": "boolean",
+              "default": false,
+              "description": "Включить шифрование"
+            },
+            "certificate": {
+              "type": ["string", "null"],
+              "description": "Путь к сертификату"
+            },
+            "private_key": {
+              "type": ["string", "null"],
+              "description": "Путь к приватному ключу"
+            }
+          }
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "required": ["default"],
+      "properties": {
+        "default": {
+          "type": "object",
+          "required": ["dbname", "host", "user", "password"],
+          "properties": {
+            "dbname": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Имя базы данных"
+            },
+            "host": {
+              "type": "string",
+              "default": "localhost",
+              "description": "Хост базы данных"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "default": 5432,
+              "description": "Порт базы данных"
+            },
+            "user": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Пользователь базы данных"
+            },
+            "password": {
+              "type": "string",
+              "description": "Пароль базы данных"
+            },
+            "connect_timeout": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300,
+              "default": 10,
+              "description": "Таймаут подключения (сек)"
+            }
+          }
+        }
+      }
+    },
+    "polling": {
+      "type": "object",
+      "properties": {
+        "notify_timeout_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "default": 5,
+          "description": "Таймаут опроса NOTIFY"
+        },
+        "update_interval_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 5,
+          "description": "Интервал обновления телеметрии"
+        },
+        "default_period_min": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10080,
+          "default": 1440,
+          "description": "Период актуальности данных (мин)"
+        }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "properties": {
+        "executor_enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Включить исполнитель команд"
+        },
+        "queue_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 100,
+          "description": "Размер очереди команд"
+        },
+        "poll_interval_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "default": 2,
+          "description": "Интервал опроса БД"
+        },
+        "worker_threads": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 1,
+          "description": "Количество потоков обработки"
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 3,
+          "description": "Максимум попыток выполнения"
+        },
+        "retry_delay_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300,
+          "default": 5,
+          "description": "Задержка перед повтором"
+        }
+      }
+    },
+    "hot_reload": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Включить hot-reload команд"
+        },
+        "interval_sec": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 3600,
+          "default": 30,
+          "description": "Интервал проверки изменений"
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+          "default": "INFO",
+          "description": "Уровень логирования"
+        },
+        "format": {
+          "type": "string",
+          "default": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+          "description": "Формат логов"
+        },
+        "file": {
+          "type": ["string", "null"],
+          "description": "Путь к файлу логов"
+        }
+      }
+    }
+  }
+}
