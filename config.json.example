@@ -1,0 +1,53 @@
+{
+  "app": {
+    "name": "SystemX OPC UA Server",
+    "version": "1.1.0",
+    "namespace_uri": "http://server",
+    "time_version": "01.2022"
+  },
+  "server": {
+    "endpoint": "opc.tcp://0.0.0.0:4840/",
+    "bind_address": "0.0.0.0",
+    "port": 4840,
+    "security": {
+      "enable_encryption": false,
+      "certificate": null,
+      "private_key": null,
+      "security_policy": ["NoSecurity"]
+    }
+  },
+  "database": {
+    "default": {
+      "dbname": "piter",
+      "host": "192.168.31.129",
+      "user": "systemx",
+      "password": "systemx",
+      "port": 5432,
+      "connect_timeout": 10,
+      "statement_timeout": 30000,
+      "idle_in_transaction_session_timeout": 60000
+    }
+  },
+  "polling": {
+    "notify_timeout_sec": 5,
+    "update_interval_sec": 5,
+    "default_period_min": 1440
+  },
+  "commands": {
+    "executor_enabled": true,
+    "queue_size": 100,
+    "poll_interval_sec": 2,
+    "worker_threads": 1,
+    "max_retries": 3,
+    "retry_delay_sec": 5
+  },
+  "hot_reload": {
+    "enabled": true,
+    "interval_sec": 30
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    "file": null
+  }
+}
