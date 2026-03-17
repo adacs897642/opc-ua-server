@@ -1,12 +1,9 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-.env
+# config.json
+# Конфигурация с паролями
+config.json
+config.local.json
+config.prod.json
+*.secret.json
 
 # Логи
 logs/
@@ -18,18 +15,40 @@ certs/
 *.der
 *.key
 
-# Конфигурация с паролями
-config.local.json
-config.json
-.secrets
+# Переменные окружения
+.env
+.env.local
+.env.prod
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 
 # Тесты
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
+
+# База данных (если локальная)
+*.db
+*.sqlite
+*.sqlite3
+
+# Временные файлы
+tmp/
+temp/
+*.tmp

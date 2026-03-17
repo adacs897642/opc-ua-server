@@ -2,30 +2,24 @@
   "app": {
     "name": "SystemX OPC UA Server",
     "version": "1.1.0",
-    "namespace_uri": "http://server",
-    "time_version": "01.2022"
+    "namespace_uri": "http://server"
   },
   "server": {
     "endpoint": "opc.tcp://0.0.0.0:4840/",
-    "bind_address": "0.0.0.0",
-    "port": 4840,
     "security": {
       "enable_encryption": false,
       "certificate": null,
-      "private_key": null,
-      "security_policy": ["NoSecurity"]
+      "private_key": null
     }
   },
   "database": {
     "default": {
-      "dbname": "piter",
-      "host": "192.168.31.129",
-      "user": "systemx",
-      "password": "systemx",
+      "dbname": "CHANGE_ME",
+      "host": "127.0.0.1",
+      "user": "CHANGE_ME",
+      "password": "CHANGE_ME",  ← Заглушка вместо пароля!
       "port": 5432,
-      "connect_timeout": 10,
-      "statement_timeout": 30000,
-      "idle_in_transaction_session_timeout": 60000
+      "connect_timeout": 10
     }
   },
   "polling": {
@@ -37,9 +31,7 @@
     "executor_enabled": true,
     "queue_size": 100,
     "poll_interval_sec": 2,
-    "worker_threads": 1,
-    "max_retries": 3,
-    "retry_delay_sec": 5
+    "worker_threads": 1
   },
   "hot_reload": {
     "enabled": true,
