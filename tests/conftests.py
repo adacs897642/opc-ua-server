@@ -31,7 +31,7 @@ def test_config():
         },
         'database': {
             'default': {
-                'dbname': 'test_systemx',
+                'dbname': 'test',
                 'host': 'localhost',
                 'user': 'test_user',
                 'password': 'test_password',
@@ -182,7 +182,7 @@ def real_db(test_db_container):
     from db.connection import Database
 
     db = Database({
-        'dbname': 'test_systemx',
+        'dbname': 'test',
         'host': 'localhost',
         'user': 'test_user',
         'password': 'test_password',

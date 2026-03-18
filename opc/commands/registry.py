@@ -1,13 +1,20 @@
 # opc/commands/registry.py
+# -*- coding: utf-8 -*-
+"""
+Реестр команд OPC UA
+"""
 
 import logging
 import json
-from typing import Optional, Dict, Any
-from opcua import ua
-from opcua.ua import Variant, StatusCodes, VariantType
+from typing import Dict, Any, Optional, Callable, Tuple
+from datetime import datetime, timezone
 
+from opcua import ua
+from opcua.ua import Variant, VariantType, StatusCode, StatusCodes, LocalizedText
 
 from db.connection import Database
+
+logger = logging.getLogger(__name__)
 
 
 class CommandRegistry:
@@ -17,119 +24,181 @@ class CommandRegistry:
         self.db = db
         self.logger = logging.getLogger('commands.registry')
         self.commands: Dict[str, dict] = {}
+        self._command_nodes: Dict[str, Any] = {}  # code -> node
         self.load()
 
     def load(self) -> None:
-        """Загружает команды из БД в память"""
-        rows = self.db.query("""
-            SELECT id, code, name, description, has_params, param_schema, is_active
-            FROM commands_catalog
-            WHERE is_active = TRUE
-        """)
+        """Загружает каталог команд из БД"""
+        try:
+            rows = self.db.query("""
+                SELECT id, code, name, description, has_params, param_schema, is_active
+                FROM commands_catalog
+                WHERE is_active = TRUE
+                ORDER BY code
+            """)
 
-        self.commands = {}
-        for r in rows:
-            cmd_id, code, name, desc, has_params, schema, is_active = r
-            self.commands[code] = {
-                'id': cmd_id,
-                'name': name,
-                'description': desc,
-                'has_params': has_params,
-                'schema': schema or []
-            }
+            self.commands = {}
+            for row in rows:
+                cmd_id, code, name, desc, has_params, param_schema, is_active = row
 
-        self.logger.info(f"Загружено команд: {len(self.commands)}")
+                try:
+                    schema = json.loads(param_schema) if param_schema else []
+                except (json.JSONDecodeError, TypeError):
+                    schema = []
 
-    # def execute(self, method_id, variant_args) -> tuple:
-    #     """Выполняет команду"""
-    #     # Определяем код команды по NodeId (нужен маппинг)
-    #     code = self._get_code_from_node_id(method_id)
-    #     meta = self.commands.get(code)
-    #
-    #     if not meta:
-    #         return ua.StatusCode(StatusCodes.Bad_NodeIdUnknown), [
-    #             Variant(-1, ua.VariantType.Int32),
-    #             Variant("Команда не найдена", ua.VariantType.String)
-    #         ]
-    #
-    #     # Валидация и выполнение
-    #     try:
-    #         params = self._validate_params(meta, variant_args)
-    #         queue_id = self._queue_command(meta['id'], params)
-    #
-    #         return ua.StatusCode(StatusCodes.Good), [
-    #             Variant(0, ua.VariantType.Int32),
-    #             Variant(f"Команда принята, ID: {queue_id}", ua.VariantType.String)
-    #         ]
-    #     except Exception as e:
-    #         self.logger.exception(f"Ошибка выполнения команды {code}")
-    #         return ua.StatusCode(StatusCodes.Bad_InternalError), [
-    #             Variant(-999, ua.VariantType.Int32),
-    #             Variant(str(e), ua.VariantType.String)
-    #         ]
-    def execute(self, method_id, variant_args, sim: str = None) -> tuple:
+                self.commands[code] = {
+                    'id': cmd_id,
+                    'code': code,
+                    'name': name,
+                    'description': desc,
+                    'has_params': bool(has_params),
+                    'param_schema': schema,
+                    'is_active': bool(is_active)
+                }
+
+            self.logger.info(f"Загружено команд: {len(self.commands)}")
+
+        except Exception as e:
+            self.logger.error(f"Ошибка загрузки команд: {e}", exc_info=True)
+
+    # opc/commands/registry.py
+
+    # opc/commands/registry.py
+
+    def execute(
+            self,
+            nodeid: ua.NodeId,
+            args: tuple,
+            sim: str,
+            code: str = None  # ← ← ← ЭТОТ ПАРАМЕТР ДОЛЖЕН БЫТЬ!
+    ) -> list:
         """
-        Выполняет команду
+        Выполняет команду через очередь
 
         Args:
-            method_id: NodeId вызванного метода
-            variant_args: Аргументы метода
-            sim: SIM устройства ← НОВОЕ!
+            nodeid: NodeId вызванного метода
+            args: Кортеж входных аргументов
+            sim: SIM устройства
+            code: Код команды (если известен из замыкания) ← ← ←
         """
-        code = self._get_code_from_node_id(method_id)
-        meta = self.commands.get(code)
+        # ✅ Если код передан напрямую - используем его!
+        # В начале execute()
+        self.logger.info(f"🔍 execute() вызван:")
+        self.logger.info(f"   code параметр: {code}")
+        self.logger.info(f"   self.commands ключи: {list(self.commands.keys())}")
+        self.logger.info(f"   code in self.commands: {code in self.commands if code else False}")
+        if code:
+            self.logger.info(f"🔍 Код команды из замыкания: {code}")
+        else:
+            # Ищем по NodeId (старый способ)
+            code = self._get_code_from_node_id(nodeid)
+            self.logger.info(f"🔍 Код команды из NodeId: {code}")
 
-        if not meta:
-            return ua.StatusCode(StatusCodes.Bad_NodeIdUnknown), [
+        if not code or code not in self.commands:
+            self.logger.warning(f"❌ Команда не найдена: {code}")
+            return [
                 Variant(-1, VariantType.Int32),
-                Variant("Команда не найдена", VariantType.String)
+                Variant(f"Команда не найдена: {code}", VariantType.String)
             ]
+
+        meta = self.commands[code]
 
         try:
-            params = self._validate_params(meta, variant_args)
-
-            # ✅ НОВОЕ: передаём sim в очередь
+            params = self._parse_args(meta, args)
             queue_id = self._queue_command(meta['id'], sim, params)
 
-            return ua.StatusCode(StatusCodes.Good), [
+            self.logger.info(f"✅ Команда {code} добавлена в очередь: ID={queue_id}")
+
+            return [
                 Variant(0, VariantType.Int32),
-                Variant(f"Команда принята, ID: {queue_id}, Устройство: {sim}", VariantType.String)
+                Variant(f"Команда принята, ID: {queue_id}", VariantType.String)
             ]
+
         except Exception as e:
             self.logger.exception(f"Ошибка выполнения команды {code}")
-            return ua.StatusCode(StatusCodes.Bad_InternalError), [
+            return [
                 Variant(-999, VariantType.Int32),
                 Variant(str(e), VariantType.String)
             ]
+
+    def _parse_args(self, meta: dict, args: tuple) -> dict:
+        """Парсит аргументы метода в словарь"""
+        params = {}
+
+        if not meta.get('has_params') or not meta.get('param_schema'):
+            return params
+
+        schema = meta['param_schema']
+
+        for i, arg in enumerate(args):
+            if i < len(schema):
+                param_name = schema[i].get('name', f'param_{i}')
+                # ✅ Получаем значение из Variant
+                params[param_name] = arg.Value if hasattr(arg, 'Value') else arg
+
+        return params
+
+    def _get_code_from_node_id(self, node_id: ua.NodeId) -> Optional[str]:
+        """Получает код команды по NodeId"""
+        for code, info in self._command_nodes.items():
+            if info.get('node_id') == node_id:
+                return code
+        return None
+
+    def _parse_args(self, meta: dict, variant_args: list) -> dict:
+        """Парсит аргументы метода в словарь"""
+        params = {}
+
+        if not meta.get('has_params') or not meta.get('param_schema'):
+            return params
+
+        schema = meta['param_schema']
+
+        for i, arg in enumerate(variant_args):
+            if i < len(schema):
+                param_name = schema[i].get('name', f'param_{i}')
+                params[param_name] = arg.Value if hasattr(arg, 'Value') else arg
+
+        return params
 
     def _queue_command(self, command_id: int, sim: str, params: dict) -> int:
         """Добавляет команду в очередь"""
         rows = self.db.query("""
             INSERT INTO commands_queue (command_id, sim, params, status, requested_by)
-            VALUES (%s, %s, %s, 'pending', %s)
+            VALUES (%s, %s, %s, 'pending', 'opc_user')
             RETURNING id
-        """, (command_id, sim, json.dumps(params), 'opc_user'))
-        return rows[0][0]
+        """, (command_id, sim, json.dumps(params)))
 
-    def _get_code_from_node_id(self, node_id) -> str:
-        """Получает код команды по NodeId"""
-        # Реализация через сохранённый маппинг {NodeId: code}
-        pass
+        queue_id = rows[0][0]
+        self.logger.info(f"Команда добавлена в очередь: ID={queue_id}, sim={sim}")
 
-    def _validate_params(self, meta: dict, variant_args: list) -> dict:
-        """Валидирует параметры команды"""
-        params = {}
-        if meta['has_params']:
-            for i, arg_def in enumerate(meta['schema']):
-                if i < len(variant_args):
-                    params[arg_def['name']] = variant_args[i].Value
-        return params
+        return queue_id
 
-    def _queue_command(self, command_id: int, params: dict) -> int:
-        """Добавляет команду в очередь"""
-        rows = self.db.query("""
-            INSERT INTO commands_queue (command_id, params, status)
-            VALUES (%s, %s, 'pending')
-            RETURNING id
-        """, (command_id, json.dumps(params)))
-        return rows[0][0]
+    # opc/commands/registry.py
+
+    def register_command_node(self, code: str, node: Any, node_id: ua.NodeId = None) -> None:
+        """
+        Регистрирует узел команды для обратного поиска
+
+        Args:
+            code: Код команды
+            node: Узел OPC UA
+            node_id: NodeId узла (явно переданный)
+        """
+        # Если node_id не передан, пробуем получить из узла
+        if node_id is None:
+            node_id = node.nodeid if hasattr(node, 'nodeid') else None
+
+        self.logger.debug(f"📝 Регистрация команды: {code}")
+        self.logger.debug(f"   NodeId: {node_id}")
+
+        self._command_nodes[code] = {
+            'node': node,
+            'node_id': node_id
+        }
+
+        self.logger.debug(f"   Зарегистрировано: {code in self._command_nodes}")
+
+    def get_command_meta(self, code: str) -> Optional[dict]:
+        """Получает метаданные команды"""
+        return self.commands.get(code)

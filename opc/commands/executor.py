@@ -360,12 +360,13 @@ class CommandExecutor:
             if handler is None:
                 raise ValueError(f"Обработчик для команды '{task.command_code}' не найден")
 
-            # ✅ НОВОЕ: передаём sim в обработчик
+            # Вызов обработчика с параметрами и sim
             result = handler(task.params, task.sim)
 
             task.completed_at = datetime.now(timezone.utc)
             self._processed_count += 1
 
+            # Обновляем статус в БД
             self._update_task_status(
                 task.task_id,
                 ExecutorConfig.STATUS_DONE,
@@ -378,33 +379,30 @@ class CommandExecutor:
             self.logger.error(f"❌ Ошибка выполнения задачи {task.task_id}: {e}", exc_info=True)
             task.error_message = str(e)
             task.retry_count += 1
-        if task.retry_count < ExecutorConfig.DEFAULT_MAX_RETRIES:
-            self.logger.warning(
-                f"Попытка {task.retry_count}/{ExecutorConfig.DEFAULT_MAX_RETRIES}, "
-                f"задача {task.task_id} будет повторена"
-            )
-            self._update_task_status(
-                task.task_id,
-                ExecutorConfig.STATUS_PENDING,
-                result_message=f"Ошибка: {e}. Попытка {task.retry_count}"
-            )
-            time.sleep(ExecutorConfig.DEFAULT_RETRY_DELAY_SEC)
-            try:
-                self._queue.put_nowait(task)
-            except Exception:
+
+            if task.retry_count < ExecutorConfig.DEFAULT_MAX_RETRIES:
+                self._update_task_status(
+                    task.task_id,
+                    ExecutorConfig.STATUS_PENDING,
+                    result_message=f"Ошибка: {e}. Попытка {task.retry_count}"
+                )
+                time.sleep(ExecutorConfig.DEFAULT_RETRY_DELAY_SEC)
+                try:
+                    self._queue.put_nowait(task)
+                except Exception:
+                    self._failed_count += 1
+                    self._update_task_status(
+                        task.task_id,
+                        ExecutorConfig.STATUS_FAILED,
+                        result_message=f"Ошибка после {task.retry_count} попыток: {e}"
+                    )
+            else:
                 self._failed_count += 1
                 self._update_task_status(
                     task.task_id,
                     ExecutorConfig.STATUS_FAILED,
                     result_message=f"Ошибка после {task.retry_count} попыток: {e}"
                 )
-        else:
-            self._failed_count += 1
-            self._update_task_status(
-                task.task_id,
-                ExecutorConfig.STATUS_FAILED,
-                result_message=f"Ошибка после {task.retry_count} попыток: {e}"
-            )
 
     def _update_task_status(
             self,

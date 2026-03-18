@@ -222,3 +222,81 @@ class DataLoader:
                 'disp': row[7]
             })
         return params
+
+
+    def get_devices(self) -> List[dict]:
+        """
+        Получает список устройств из objects_new
+
+        Returns:
+            List[dict]: Список словарей с данными устройств
+        """
+        try:
+            rows = self.db.query("""
+                SELECT 
+                    id,
+                    name,
+                    sim,
+                    sname,
+                    tb,
+                    num
+                FROM objects_new
+                WHERE sim IS NOT NULL AND sim <> ''
+                ORDER BY name
+            """)
+
+            devices = []
+            for row in rows:
+                devices.append({
+                    'id': row[0],
+                    'name': row[1],
+                    'sim': row[2],  # ← ← ← SIM устройства!
+                    'sname': row[3],
+                    'tb': row[4],
+                    'num': row[5]
+                })
+
+            self.logger.info(f"📊 Загружено устройств: {len(devices)}")
+            return devices
+
+        except Exception as e:
+            self.logger.error(f"Ошибка загрузки устройств: {e}", exc_info=True)
+            return []
+
+    def get_device_commands(self, sim: str) -> dict:
+        """
+        Получает доступные команды для устройства
+
+        Args:
+            sim: SIM устройства
+
+        Returns:
+            dict: {code: meta} доступных команд
+        """
+        # Пока возвращаем все активные команды из каталога
+        # В будущем можно добавить привязку команд к устройствам
+        rows = self.db.query("""
+            SELECT code, name, description, has_params, param_schema
+            FROM commands_catalog
+            WHERE is_active = TRUE
+            ORDER BY code
+        """)
+
+        commands = {}
+        for row in rows:
+            code, name, desc, has_params, param_schema = row
+            import json
+            try:
+                schema = json.loads(param_schema) if param_schema else []
+            except:
+                schema = []
+
+            commands[code] = {
+                'code': code,
+                'name': name,
+                'description': desc,
+                'has_params': bool(has_params),
+                'param_schema': schema
+            }
+
+        return commands

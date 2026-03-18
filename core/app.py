@@ -104,17 +104,65 @@ class OPCApp:
         return {
             'REBOOT': self._handle_reboot,
             'SET_CONFIG': self._handle_set_config,
+            'CLEAR_ALARM': self._handle_clear_alarm,
         }
 
-    def _handle_reboot(self, params: dict) -> dict:
-        """Обработчик команды перезагрузки"""
-        self.logger.info("Выполняется перезагрузка...")
-        return {'status': 'ok', 'message': 'Перезагрузка инициирована'}
+    def _handle_reboot(self, params: dict, sim: str) -> dict:
+        """
+        Обработчик команды перезагрузки
 
-    def _handle_set_config(self, params: dict) -> dict:
-        """Обработчик команды настройки"""
-        self.logger.info(f"Установка конфигурации: {params}")
-        return {'status': 'ok', 'message': 'Конфигурация обновлена'}
+        Args:
+            params: Параметры команды
+            sim: SIM устройства
+        """
+        self.logger.info(f"🔄 Перезагрузка устройства {sim}...")
+
+        # Здесь ваша логика перезагрузки
+        # Например: отправка через MQTT, Modbus, HTTP API
+
+        return {
+            'status': 'ok',
+            'message': f'Перезагрузка инициирована для {sim}',
+            'sim': sim,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+
+    def _handle_set_config(self, params: dict, sim: str) -> dict:
+        """
+        Обработчик команды настройки
+
+        Args:
+            params: Параметры команды
+            sim: SIM устройства
+        """
+        self.logger.info(f"⚙️ Настройка устройства {sim}: {params}")
+
+        # Логика настройки устройства
+
+        return {
+            'status': 'ok',
+            'message': f'Конфигурация обновлена для {sim}',
+            'sim': sim,
+            'params': params
+        }
+
+    def _handle_clear_alarm(self, params: dict, sim: str) -> dict:
+        """
+        Обработчик команды сброса аварии
+
+        Args:
+            params: Параметры команды
+            sim: SIM устройства
+        """
+        self.logger.info(f"🔕 Сброс аварии на устройстве {sim}")
+
+        # Логика сброса аварии
+
+        return {
+            'status': 'ok',
+            'message': f'Авария сброшена для {sim}',
+            'sim': sim
+        }
 
     def _load_commands_initial(self) -> None:
         """Первоначальная загрузка команд"""

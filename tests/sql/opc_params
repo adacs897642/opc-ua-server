@@ -1,0 +1,73 @@
+-- 1. Общая статистика
+SELECT
+    COUNT(*) as total_params,
+    COUNT(DISTINCT sim) as devices,
+    COUNT(DISTINCT pgroup) as groups
+FROM opc_params;
+
+-- 2. Параметры по типам
+SELECT type, COUNT(*) as count
+FROM opc_params
+GROUP BY type
+ORDER BY count DESC;
+
+-- 3. Параметры по группам
+SELECT pgroup, COUNT(*) as count
+FROM opc_params
+WHERE pgroup IS NOT NULL AND pgroup <> ''
+GROUP BY pgroup
+ORDER BY count DESC;
+
+-- 4. Проверка связи с objects_new
+SELECT
+    onew.name as object_name,
+    onew.sim,
+    COUNT(opc.alias) as params_count
+FROM objects_new onew
+LEFT JOIN opc_params opc ON opc.sim = onew.sim
+WHERE onew.sim IS NOT NULL
+GROUP BY onew.name, onew.sim
+ORDER BY params_count DESC;
+
+-- 5. Параметры без типа (требуют ручной проверки)
+SELECT alias, sim, name, type
+FROM opc_params
+WHERE type IS NULL OR type = ''
+ORDER BY sim, alias;
+
+-- 6 Получить параметр с текущим значением
+SELECT
+    op.alias,
+    op.name,
+    op.unit,
+    op.type,
+    pv.value,
+    pv.time  ← ✅ Время из pvalues!
+FROM opc_params op
+LEFT JOIN pvalues pv ON pv.alias = op.alias
+WHERE op.sim = '12345'
+ORDER BY op.alias;
+
+-- Параметры у которых данные старше 1 часа
+SELECT
+    op.alias,
+    op.name,
+    pv.time,
+    EXTRACT(EPOCH FROM (NOW() - pv.time)) / 60 as minutes_ago
+FROM opc_params op
+LEFT JOIN pvalues pv ON pv.alias = op.alias
+WHERE pv.time < NOW() - INTERVAL '1 hour'
+ORDER BY pv.time;
+
+-- Получить статистику по устройствам
+SELECT
+    onew.name as device,
+    onew.sim,
+    COUNT(op.alias) as params_count,
+    COUNT(pv.alias) as values_count,
+    MAX(pv.time) as last_update
+FROM objects_new onew
+LEFT JOIN opc_params op ON op.sim = onew.sim
+LEFT JOIN pvalues pv ON pv.alias = op.alias
+GROUP BY onew.name, onew.sim
+ORDER BY last_update DESC;
