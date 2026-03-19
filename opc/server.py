@@ -27,7 +27,7 @@ from db.connection import Database
 from db.data_loader import DataLoader, TelemetryData
 from opc.nodes import NodeCreator
 from opc.types import OPCTypeMapper
-from opc.commands.registry import CommandRegistry
+from opc.commands.registry import OpcCommandRegistry
 from opc.status_codes import status_determiner
 from opcua.common.manage_nodes import create_method as create_method_node
 
@@ -46,7 +46,10 @@ class OPCServer:
         self.idx: Optional[int] = None
         self.node_creator: Optional[NodeCreator] = None
         self.data_loader: Optional[DataLoader] = None
-        self.command_registry: Optional[CommandRegistry] = None
+
+        # ✅ Создаём реестр команд (внутри него - receiver)
+        self.opc_command_registry = OpcCommandRegistry(db)
+        # self.opc_command_registry: Optional[OpcCommandRegistry] = None
 
         self._telemetry_nodes: Dict[str, Any] = {}
         self._device_nodes: Dict[str, Any] = {}
@@ -86,7 +89,7 @@ class OPCServer:
         # Инициализация загрузчиков
         default_period = self.config.get('polling.default_period_min', 1440)
         self.data_loader = DataLoader(self.db, default_period)
-        self.command_registry = CommandRegistry(self.db)
+        self.opc_command_registry = OpcCommandRegistry(self.db)
 
         # Создание структуры
         self.create_address_space()
@@ -173,33 +176,38 @@ class OPCServer:
         """Создаёт адресное пространство сервера"""
         try:
             objects_node = self.server.get_objects_node()
-
-            # ✅ ПОЛУЧАЕМ УСТРОЙСТВА ЧЕРЕЗ DataLoader
             devices = self.data_loader.get_devices()
 
-            if not devices:
-                self.logger.warning("⚠️ Нет устройств для создания адресного пространства")
-                return
+            # ✅ ОТЛАДКА: ПРОВЕРИТЬ ЧТО В registry.commands
+            self.logger.info(f"🔍 opc_command_registry.commands keys: {list(self.opc_command_registry.commands.keys())}")
 
-            self.logger.info(f"📦 Создаём адресное пространство для {len(devices)} устройств")
+            for code, meta in self.opc_command_registry.commands.items():
+                self.logger.info(f"🔍 {code} в registry:")
+                self.logger.info(f"   has_params: {meta.get('has_params')}")
+                self.logger.info(f"   param_schema: {meta.get('param_schema')}")
+                self.logger.info(f"   param_schema len: {len(meta.get('param_schema', []))}")
 
-            for device in devices:
-                obj_name = device.get('name', 'Unknown')
-                obj_sim = device.get('sim')  # ← ← ← Теперь sim есть!
+            # ✅ Получаем команды
+            commands = self.opc_command_registry.commands
+
+            for obj_data in devices:
+                obj_name = obj_data.get('name', 'Unknown')
+                obj_sim = obj_data.get('sim')
 
                 if not obj_sim:
-                    self.logger.warning(f"⚠️ Устройство {obj_name} без SIM, пропускаем")
                     continue
 
-                # ✅ Получаем команды для этого устройства
-                commands = self.data_loader.get_device_commands(obj_sim)
+                # ✅ ОТЛАДКА: ПРОВЕРИТЬ ПЕРЕД СОЗДАНИЕМ
+                self.logger.info(f"🔍 Перед созданием {obj_name}:")
+                for code, meta in commands.items():
+                    if code == 'SET_CONFIG':
+                        self.logger.info(f"   SET_CONFIG param_schema: {meta.get('param_schema')}")
 
-                # ✅ Создаём устройство
                 self._create_device_object(
                     objects_node,
                     obj_name,
-                    device,  # ← ← ← dict с sim, name, etc.
-                    commands
+                    obj_data,
+                    commands  # ← ← ← Передаём commands
                 )
 
             self.logger.info("✅ Адресное пространство создано")
@@ -219,6 +227,18 @@ class OPCServer:
         """
         try:
             from opcua.ua import NodeClass, AttributeIds, LocalizedText, DataValue, Variant, VariantType
+
+            # ✅ ОТЛАДКА: ПРОВЕРИТЬ commands
+            self.logger.info(f"🔍 {obj_name}: commands keys: {list(commands.keys())}")
+
+            for code, meta in commands.items():
+                if code == 'SET_CONFIG':
+                    self.logger.info(f"🔍 SET_CONFIG в _create_device_object:")
+                    self.logger.info(f"   meta type: {type(meta)}")
+                    self.logger.info(f"   meta keys: {meta.keys()}")
+                    self.logger.info(f"   has_params: {meta.get('has_params')}")
+                    self.logger.info(f"   param_schema: {meta.get('param_schema')}")
+                    self.logger.info(f"   param_schema type: {type(meta.get('param_schema'))}")
 
             # ✅ ИЗВЛЕКАЕМ SIM
             obj_sim = obj_data.get('sim')
@@ -289,6 +309,9 @@ class OPCServer:
 
             # ✅ Создаём методы команд
             for code, meta in commands.items():
+                self.logger.info(f"🔍 Вызов _create_command_node для {code}:")
+                self.logger.info(f"   meta: {meta}")
+
                 self._create_command_node(
                     commands_folder,
                     code,
@@ -313,17 +336,53 @@ class OPCServer:
         try:
             from opcua.ua import NodeClass, AttributeIds, LocalizedText, DataValue, Variant
 
-            # Формируем аргументы
-            input_args = []
-            if meta.get('has_params') and meta.get('param_schema'):
-                for p in meta['param_schema']:
-                    dtype = self._get_builtin_node_id(p.get('type', 'string'))
-                    input_args.append(self._create_argument(
-                        name=p['name'],
-                        data_type=dtype,
-                        description=p.get('desc', '')
-                    ))
+            self.logger.info(f"🔍 Создание команды: {code}")
+            self.logger.info(f"   meta keys: {meta.keys()}")
+            self.logger.info(f"   has_params: {meta.get('has_params')}")
+            self.logger.info(f"   param_schema: {meta.get('param_schema')}")
+            self.logger.info(f"   param_schema type: {type(meta.get('param_schema'))}")
 
+            # ✅ ФОРМИРУЕМ ВХОДНЫЕ АРГУМЕНТЫ
+            input_args = []
+
+            # 🔍 ПРОВЕРЯЕМ УСЛОВИЕ
+            has_params = meta.get('has_params')
+            param_schema = meta.get('param_schema')
+
+            self.logger.info(f"   🔍 has_params truthy: {bool(has_params)}")
+            self.logger.info(f"   🔍 param_schema truthy: {bool(param_schema)}")
+            self.logger.info(f"   🔍 param_schema len: {len(param_schema) if param_schema else 0}")
+
+            if has_params and param_schema:
+                self.logger.info(f"📋 {code}: Создаём input_args...")
+
+                for i, p in enumerate(param_schema):
+                    self.logger.info(f"   Параметр {i}: {p}")
+
+                    param_type = p.get('type', 'string')
+                    param_name = p.get('name', f'param_{i}')
+                    param_desc = p.get('desc', '')
+
+                    dtype = self._get_builtin_node_id(param_type)
+
+                    self.logger.info(f"   + InputArgument: {param_name} (type={param_type}, dtype={dtype})")
+
+                    arg = self._create_argument(
+                        name=param_name,
+                        data_type=dtype,
+                        description=param_desc
+                    )
+
+                    input_args.append(arg)
+                    self.logger.info(f"   ✅ Добавлен аргумент {i}: {arg.Name}")
+            else:
+                self.logger.warning(f"⚠️ {code}: НЕ создаём input_args!")
+                self.logger.warning(f"   has_params: {has_params}")
+                self.logger.warning(f"   param_schema: {param_schema}")
+
+            self.logger.info(f"📋 {code}: Всего input_args: {len(input_args)}")
+
+            # ✅ ВЫХОДНЫЕ АРГУМЕНТЫ
             output_args = [
                 self._create_argument(
                     name='result_code',
@@ -337,20 +396,26 @@ class OPCServer:
                 )
             ]
 
-            # ✅ СОЗДАЁМ УНИКАЛЬНЫЙ CALLBACK ДЛЯ ЭТОЙ КОМАНДЫ
-            def command_callback(method_nodeid, *args):
-                """Callback для конкретной команды (замыкание)"""
-                self.logger.info(f"🔔 Callback вызван для: code={code}, sim={sim}")
-                return self._on_command_call_with_code(code, sim, method_nodeid, *args)
+            self.logger.info(f"📋 {code}: Всего output_args: {len(output_args)}")
 
             # ✅ Создаём метод
+            def command_callback(method_nodeid, *args):
+                return self._on_command_call_with_code(code, sim, method_nodeid, *args)
+
+            self.logger.info(f"📋 {code}: Вызов add_method()...")
+            self.logger.info(f"   input_args: {len(input_args)}")
+            self.logger.info(f"   output_args: {len(output_args)}")
+
             node = parent_node.add_method(
                 ua.NodeId(0, self.idx),
                 ua.QualifiedName(code, self.idx),
-                command_callback,  # ← ← ← Уникальный callback!
-                input_args,
-                output_args
+                command_callback,
+                input_args,  # ← ← ← Входные аргументы!
+                output_args  # ← ← ← Выходные аргументы!
             )
+
+            self.logger.info(f"✅ Метод создан: {code}")
+            self.logger.info(f"   NodeId: {node.nodeid}")
 
             method_node_id = node.nodeid
 
@@ -417,7 +482,7 @@ class OPCServer:
         self.logger.info(f"✅ Выполнение: {code} для sim={sim}")
 
         # ✅ ПЕРЕДАЁМ КОД НАПРЯМУЮ
-        result = self.command_registry.execute(
+        result = self.opc_command_registry.execute(
             method_nodeid,
             args,
             sim=sim,
@@ -468,7 +533,7 @@ class OPCServer:
                     self.logger.info(f"✅ Найдено: {cache_key} -> sim={sim}")
 
                     # Выполняем через реестр
-                    return self.command_registry.execute(method_nodeid, args, sim=sim)
+                    return self.opc_command_registry.execute(method_nodeid, args, sim=sim)
 
             # ❌ Не найдено
             self.logger.warning(f"❌ Команда '{code}' не найдена в кэше")
@@ -619,10 +684,8 @@ class OPCServer:
     def update_parameter(self, alias: str) -> bool:
         """
         Обновляет значение параметра и Property StatusMessage
-
         Args:
             alias: Алиас параметра
-
         Returns:
             True если успешно
         """
@@ -646,6 +709,7 @@ class OPCServer:
                 now = datetime.now(timezone.utc)
                 source_ts = now
                 server_ts = now
+
 
                 # Обновляем основной узел
                 node.set_value(DataValue(
@@ -684,12 +748,42 @@ class OPCServer:
             server_ts = datetime.now(timezone.utc)  # ← Время обработки сервером
 
             # Обновляем основной узел
+            # В блоке "ЕСТЬ ДАННЫЕ", перед node.set_value():
+
             variant_type = node.get_data_type()
+
+            # ✅ Обработка None перед созданием Variant
+            if value is None:
+                if variant_type == ua.NodeId(ua.ObjectIds.DateTime):
+                    safe_value = []  # Пустой массив для DateTime
+                    is_array = True
+                elif variant_type in (ua.NodeId(ua.ObjectIds.Int32), ua.NodeId(ua.ObjectIds.Double)):
+                    safe_value = 0  # Ноль для чисел
+                    is_array = False
+                elif variant_type == ua.NodeId(ua.ObjectIds.String):
+                    safe_value = ""  # Пустая строка
+                    is_array = False
+                else:
+                    safe_value = []
+                    is_array = True
+
+                variant = Variant(safe_value, variant_type, is_array=is_array)
+            else:
+                # Конвертация строки в datetime для DateTime типа
+                if variant_type == ua.NodeId(ua.ObjectIds.DateTime) and isinstance(value, str):
+                    try:
+                        value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    except:
+                        value = datetime.now(timezone.utc)
+
+                variant = Variant(value, variant_type)
+
+            # Теперь используем safe variant
             node.set_value(DataValue(
-                variant=Variant(value, variant_type),
-                status=StatusCode(status_code.value if hasattr(status_code, 'value') else status_code),
-                sourceTimestamp=source_ts,  # ← Из БД
-                serverTimestamp=server_ts  # ← Текущее
+                variant=variant,
+                status=StatusCode(...),
+                sourceTimestamp=source_ts,
+                serverTimestamp=server_ts
             ))
 
             # ✅ Обновляем Property с ТАКИМИ ЖЕ timestamps!

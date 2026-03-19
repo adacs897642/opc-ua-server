@@ -5,7 +5,7 @@ import pytest
 import time
 from unittest.mock import MagicMock
 
-from opc.commands.executor import CommandExecutor, CommandTask, ExecutorConfig
+from opc.commands.executor import OpcCommandReceiver, CommandTask, ExecutorConfig
 
 
 class TestCommandTask:
@@ -53,7 +53,7 @@ class TestCommandExecutor:
 
     @pytest.fixture
     def executor(self, mock_db):
-        exec = CommandExecutor(
+        exec = OpcCommandReceiver(
             db=mock_db,
             queue_size=10,
             poll_interval_sec=1,

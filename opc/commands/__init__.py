@@ -4,13 +4,13 @@
 Пакет управления командами OPC UA
 """
 
-from opc.commands.registry import CommandRegistry
-from opc.commands.executor import CommandExecutor, CommandTask, ExecutorConfig
+from opc.commands.registry import OpcCommandRegistry
+from opc.commands.executor import OpcCommandReceiver, CommandTask, ExecutorConfig
 from opc.commands.hot_reload import CommandHotReload, CommandNodeInfo
 
 __all__ = [
-    'CommandRegistry',
-    'CommandExecutor',
+    'OpcCommandRegistry',
+    'OpcCommandReceiver',
     'CommandTask',
     'ExecutorConfig',
     'CommandHotReload',

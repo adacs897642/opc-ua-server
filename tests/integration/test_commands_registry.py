@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from opcua import ua
 from opcua.ua import Variant, VariantType
 
-from opc.commands.registry import CommandRegistry
+from opc.commands.registry import OpcCommandRegistry
 
 
 class TestCommandRegistry:
@@ -19,7 +19,7 @@ class TestCommandRegistry:
             (2, 'CMD_2', 'Command 2', 'Desc 2', True, '[{"name": "val"}]', True)
         ]
 
-        registry = CommandRegistry(mock_db)
+        registry = OpcCommandRegistry(mock_db)
 
         assert len(registry.commands) == 2
         assert 'CMD_1' in registry.commands
@@ -31,7 +31,7 @@ class TestCommandRegistry:
         """Загрузка при отсутствии команд"""
         mock_db.query.return_value = []
 
-        registry = CommandRegistry(mock_db)
+        registry = OpcCommandRegistry(mock_db)
 
         assert len(registry.commands) == 0
 
@@ -45,7 +45,7 @@ class TestCommandRegistry:
             [(100,)]
         ]
 
-        registry = CommandRegistry(mock_db)
+        registry = OpcCommandRegistry(mock_db)
 
         # Мок для _get_code_from_node_id
         registry._get_code_from_node_id = MagicMock(return_value='TEST_CMD')
@@ -61,7 +61,7 @@ class TestCommandRegistry:
         """Выполнение несуществующей команды"""
         mock_db.query.return_value = []
 
-        registry = CommandRegistry(mock_db)
+        registry = OpcCommandRegistry(mock_db)
         registry._get_code_from_node_id = MagicMock(return_value='NONEXISTENT')
 
         status, outputs = registry.execute(MagicMock(), [])
@@ -77,7 +77,7 @@ class TestCommandRegistry:
              '[{"name": "value", "type": "float"}]', True)
         ]
 
-        registry = CommandRegistry(mock_db)
+        registry = OpcCommandRegistry(mock_db)
 
         variant_args = [Variant(42.5, VariantType.Double)]
         params = registry._validate_params(registry.commands['CMD_PARAMS'], variant_args)
@@ -93,7 +93,7 @@ class TestCommandRegistry:
              True)
         ]
 
-        registry = CommandRegistry(mock_db)
+        registry = OpcCommandRegistry(mock_db)
 
         # Передаём только 1 параметр вместо 2
         variant_args = [Variant(42.5, VariantType.Double)]

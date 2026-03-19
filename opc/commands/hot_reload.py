@@ -17,7 +17,7 @@ from opcua.ua import LocalizedText
 
 from db.connection import Database
 from opc.nodes import NodeCreator
-from opc.commands.registry import CommandRegistry
+from opc.commands.registry import OpcCommandRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ class CommandHotReload:
             self,
             db: Database,
             opc_server: Any,
-            registry: CommandRegistry,
+            registry: OpcCommandRegistry,
             check_interval_sec: int = HotReloadConfig.DEFAULT_CHECK_INTERVAL_SEC,
             commands_folder: Any = None
     ):
@@ -128,6 +128,11 @@ class CommandHotReload:
         self._reload_count = 0
         self._last_reload_time: Optional[datetime] = None
         self._error_count = 0
+        self._last_hash = None
+        self._attempt_count = 0
+        self._max_attempts = 10
+
+
 
     # ========================================================================
     # Управление жизненным циклом
@@ -392,12 +397,42 @@ class CommandHotReload:
     # ========================================================================
 
     def _get_config_hash(self) -> Optional[str]:
-        """Получает текущий хэш конфигурации из БД"""
+        """Получает хэш текущей конфигурации команд"""
         try:
-            rows = self.db.query(HotReloadConfig.QUERY_GET_CONFIG_HASH)
-            return rows[0][0] if rows else None
+            # ✅ ПРОВЕРИТЬ ЧТО db подключён
+            if not self.db:
+                self.logger.error("❌ Database connection is None!")
+                return None
+
+            rows = self.db.query("""
+                SELECT MD5(
+                    STRING_AGG(
+                        code || ':' || 
+                        COALESCE(param_schema::text, '') || ':' || 
+                        COALESCE(updated_at::text, ''),
+                        ','
+                    )
+                )
+                FROM commands_catalog
+                WHERE is_active = TRUE
+            """)
+
+            if rows and rows[0] and rows[0][0]:
+                hash_value = rows[0][0]
+                self.logger.debug(f"🔍 Хэш конфигурации: {hash_value}")
+                return hash_value
+
+            self.logger.warning("⚠️ Пустой результат хэша")
+            return None
+
         except Exception as e:
-            self.logger.error(f"Ошибка получения хэша конфигурации: {e}")
+            self._attempt_count += 1
+            self.logger.error(f"❌ Ошибка получения хэша (попытка {self._attempt_count}/{self._max_attempts}): {e}")
+
+            if self._attempt_count >= self._max_attempts:
+                self.logger.error(f"🚫 Превышено количество попыток получения хэша")
+                self.logger.error(f"💡 Отключаю hot_reload или проверьте подключение к БД")
+
             return None
 
     def _compute_command_hash(self, meta: dict) -> str:
