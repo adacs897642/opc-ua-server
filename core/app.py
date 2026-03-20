@@ -10,6 +10,7 @@ from typing import Optional
 
 from config.loader import ConfigLoader
 from db.connection import Database
+from db.schema import SchemaValidator
 from opc.server import OPCServer
 from opc.commands.registry import OpcCommandRegistry
 from opc.commands.executor import OpcCommandReceiver
@@ -63,6 +64,15 @@ class OPCApp:
 
         # ✅ База данных
         self.db = Database(self.config.db_config)
+        # ✅ Отчёт о схеме БД
+        # schema_report = self.db.validate_schema(auto_fix=True)
+
+        # if not schema_report.get('is_valid', False):
+        #     self.logger.error("❌ Критические ошибки схемы базы данных!")
+        #     self.logger.error(f"   Отсутствуют таблицы: {schema_report.get('missing_tables', [])}")
+        #     raise RuntimeError("Не удалось инициализировать схему базы данных")
+
+        self.logger.info("✅ База данных готова к работе")
 
         # ✅ OPC UA сервер (внутри: OpcCommandRegistry + OpcCommandReceiver)
         self.opc_server = OPCServer(self.config._config, self.db)

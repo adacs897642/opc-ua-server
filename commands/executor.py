@@ -38,8 +38,7 @@ class CommandExecutor:
         self.db = db
         self.config = config or {}
         self.logger = logging.getLogger('commands.executor')
-
-        # ✅ Реестр обработчиков
+        # ✅ Передаём полный конфиг (включая commands.command_dir)
         self.handler_registry = HandlerRegistry(db, config)
 
         self._running = False

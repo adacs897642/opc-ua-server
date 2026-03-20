@@ -144,7 +144,7 @@ class OpcCommandRegistry:
         if code == 'SET_CONFIG':
             param_name = params.get('param_name', '')
             param_value = params.get('param_value')
-            timeout = params.get('timeout', 0)
+            timeout = params.get('timeout', 30)
 
             # ✅ 1. Базовая валидация обязательных полей
             if not param_name or not isinstance(param_name, str) or not str(param_name).strip():
@@ -312,21 +312,47 @@ class OpcCommandRegistry:
 
         return True, ""
 
-
+    # opc/commands/registry.py
 
     def _parse_args(self, meta: dict, args: tuple) -> dict:
-        """Парсит аргументы метода в словарь параметров"""
+        """
+        Парсит аргументы метода в словарь параметров
+        (с поддержкой новой структуры _meta/params)
+        """
         params = {}
 
-        if not meta.get('has_params') or not meta.get('param_schema'):
+        # ✅ Получаем схему параметров
+        param_schema_raw = meta.get('param_schema', [])
+
+        if isinstance(param_schema_raw, dict):
+            param_schema = param_schema_raw.get('params', [])
+        elif isinstance(param_schema_raw, list):
+            param_schema = param_schema_raw
+        else:
+            param_schema = []
+
+        if not meta.get('has_params') or not param_schema:
+            self.logger.info(f"📋 Команда без параметров")
             return params
 
-        schema = meta['param_schema']
+        self.logger.info(f"📋 Схема параметров: {param_schema}")
+        self.logger.info(f"📋 Получено аргументов: {len(args)}")
 
         for i, arg in enumerate(args):
-            if i < len(schema):
-                param_name = schema[i].get('name', f'param_{i}')
+            self.logger.info(f"📋 Аргумент {i}: {arg}")
+            self.logger.info(f"📋 Тип аргумента: {type(arg)}")
 
+            if i < len(param_schema):
+                p = param_schema[i]
+
+                # ✅ Проверяем что p — dict
+                if not isinstance(p, dict):
+                    self.logger.warning(f"⚠️ Параметр {i} не dict, пропускаем")
+                    continue
+
+                param_name = p.get('name', f'param_{i}')
+
+                # ✅ Извлекаем значение из Variant
                 param_value = None
                 if hasattr(arg, 'Value'):
                     param_value = arg.Value
@@ -336,8 +362,35 @@ class OpcCommandRegistry:
                     param_value = arg
 
                 params[param_name] = param_value
+                self.logger.info(f"📋 {param_name} = {param_value} (type={type(param_value)})")
 
+        self.logger.info(f"📋 Итоговые параметры: {params}")
         return params
+
+    # def _parse_args(self, meta: dict, args: tuple) -> dict:
+    #     """Парсит аргументы метода в словарь параметров"""
+    #     params = {}
+    #
+    #     if not meta.get('has_params') or not meta.get('param_schema'):
+    #         return params
+    #
+    #     schema = meta['param_schema']
+    #
+    #     for i, arg in enumerate(args):
+    #         if i < len(schema):
+    #             param_name = schema[i].get('name', f'param_{i}')
+    #
+    #             param_value = None
+    #             if hasattr(arg, 'Value'):
+    #                 param_value = arg.Value
+    #             elif hasattr(arg, 'value'):
+    #                 param_value = arg.value
+    #             else:
+    #                 param_value = arg
+    #
+    #             params[param_name] = param_value
+    #
+    #     return params
 
     def _get_code_from_node_id(self, node_id: ua.NodeId) -> Optional[str]:
         """Получает код команды по NodeId"""

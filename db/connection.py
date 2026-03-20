@@ -7,9 +7,11 @@
 import psycopg2
 from psycopg2.extensions import connection as PgConnection
 from psycopg2 import OperationalError, InterfaceError
+from psycopg2 import sql, extras
 from typing import Optional, List, Tuple
 import logging
 import time
+
 
 logger = logging.getLogger('db')
 
@@ -20,10 +22,29 @@ class Database:
     MAX_RETRIES = 3
     RETRY_DELAY_SEC = 1
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, validate_schema: bool = True):
+        """
+        Инициализация подключения к БД
+
+        Args:
+            config: Конфигурация подключения
+            validate_schema: Автоматически проверять/создавать схему
+        """
         self.config = config
         self.conn: Optional[PgConnection] = None
+        self.logger = logging.getLogger('db')
+        self._schema_validated = False
+        self._schema_report = None
+
         self._connect()
+        # ✅ Импортируем здесь (после инициализации)
+        # from db.schema import SchemaValidator
+        # ✅ Валидация схемы внутри Database
+        if validate_schema:
+            self._schema_report = self.validate_schema()
+            self._schema_validated = self._schema_report.get('is_valid', False)
+        else:
+            self.logger.warning("⚠️ Валидация схемы отключена")
 
     def _connect(self) -> None:
         """Устанавливает соединение с БД"""
@@ -50,6 +71,39 @@ class Database:
         except Exception as e:
             logger.error(f"❌ Ошибка подключения к БД: {e}")
             raise
+
+    def validate_schema(self, auto_fix: bool = True) -> dict:
+        """
+        Проверяет и при необходимости создаёт схему БД
+
+        Args:
+            auto_fix: Автоматически создавать отсутствующие таблицы
+
+        Returns:
+            dict: Отчёт о проверке
+        """
+        self.logger.info("🔍 Валидация схемы базы данных...")
+
+        try:
+            # ✅ Импортируем здесь (после инициализации conn)
+            from db.schema import SchemaValidator
+
+            validator = SchemaValidator(self.conn)
+            report = validator.validate_and_fix()
+
+            if report['created_tables']:
+                self.logger.info(f"📊 Создано таблиц: {len(report['created_tables'])}")
+                for table in report['created_tables']:
+                    self.logger.info(f"   - {table}")
+
+            if report['created_indexes']:
+                self.logger.info(f"📊 Создано индексов: {len(report['created_indexes'])}")
+
+            return report
+
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка валидации схемы: {e}", exc_info=True)
+            return {'is_valid': False, 'error': str(e)}
 
     def _ensure_connection(self) -> None:
         """Проверяет и восстанавливает соединение"""

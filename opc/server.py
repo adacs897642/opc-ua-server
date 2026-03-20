@@ -331,33 +331,50 @@ class OPCServer:
         except Exception as e:
             self.logger.error(f"Ошибка создания устройства {obj_name}: {e}", exc_info=True)
 
+    # opc/server.py
+
     def _create_command_node(self, parent_node, code: str, meta: dict, sim: str) -> None:
-        """Создаёт метод команды с уникальным callback"""
+        """Создаёт метод команды с поддержкой _meta структуры"""
         try:
             from opcua.ua import NodeClass, AttributeIds, LocalizedText, DataValue, Variant
 
             self.logger.info(f"🔍 Создание команды: {code}")
             self.logger.info(f"   meta keys: {meta.keys()}")
-            self.logger.info(f"   has_params: {meta.get('has_params')}")
             self.logger.info(f"   param_schema: {meta.get('param_schema')}")
-            self.logger.info(f"   param_schema type: {type(meta.get('param_schema'))}")
 
             # ✅ ФОРМИРУЕМ ВХОДНЫЕ АРГУМЕНТЫ
             input_args = []
 
-            # 🔍 ПРОВЕРЯЕМ УСЛОВИЕ
-            has_params = meta.get('has_params')
-            param_schema = meta.get('param_schema')
+            # ✅ Получаем схему параметров (теперь это может быть dict с 'params')
+            param_schema_raw = meta.get('param_schema', [])
 
-            self.logger.info(f"   🔍 has_params truthy: {bool(has_params)}")
-            self.logger.info(f"   🔍 param_schema truthy: {bool(param_schema)}")
-            self.logger.info(f"   🔍 param_schema len: {len(param_schema) if param_schema else 0}")
+            # ✅ Определяем где схема параметров
+            if isinstance(param_schema_raw, dict):
+                # Новая структура: {"_meta": {...}, "params": [...]}
+                param_schema = param_schema_raw.get('params', [])
+                self.logger.info(f"📋 Новая структура param_schema (с _meta)")
+            elif isinstance(param_schema_raw, list):
+                # Старая структура: [...]
+                param_schema = param_schema_raw
+                self.logger.info(f"📋 Старая структура param_schema (список)")
+            else:
+                param_schema = []
+                self.logger.warning(f"⚠️ param_schema не dict и не list: {type(param_schema_raw)}")
+
+            self.logger.info(f"📋 Схема параметров: {param_schema}")
+
+            has_params = meta.get('has_params', False)
 
             if has_params and param_schema:
                 self.logger.info(f"📋 {code}: Создаём input_args...")
 
                 for i, p in enumerate(param_schema):
-                    self.logger.info(f"   Параметр {i}: {p}")
+                    self.logger.info(f"   Параметр {i}: {p} (type={type(p)})")
+
+                    # ✅ Проверяем что p — это dict
+                    if not isinstance(p, dict):
+                        self.logger.warning(f"⚠️ Параметр {i} не dict, пропускаем: {p}")
+                        continue
 
                     param_type = p.get('type', 'string')
                     param_name = p.get('name', f'param_{i}')
@@ -376,9 +393,7 @@ class OPCServer:
                     input_args.append(arg)
                     self.logger.info(f"   ✅ Добавлен аргумент {i}: {arg.Name}")
             else:
-                self.logger.warning(f"⚠️ {code}: НЕ создаём input_args!")
-                self.logger.warning(f"   has_params: {has_params}")
-                self.logger.warning(f"   param_schema: {param_schema}")
+                self.logger.info(f"📋 {code}: Без параметров (has_params={has_params}, schema_len={len(param_schema)})")
 
             self.logger.info(f"📋 {code}: Всего input_args: {len(input_args)}")
 
@@ -410,19 +425,16 @@ class OPCServer:
                 ua.NodeId(0, self.idx),
                 ua.QualifiedName(code, self.idx),
                 command_callback,
-                input_args,  # ← ← ← Входные аргументы!
-                output_args  # ← ← ← Выходные аргументы!
+                input_args,
+                output_args
             )
-
-            self.logger.info(f"✅ Метод создан: {code}")
-            self.logger.info(f"   NodeId: {node.nodeid}")
 
             method_node_id = node.nodeid
 
             # ✅ Устанавливаем атрибуты
             node.set_attribute(
                 AttributeIds.DisplayName,
-                DataValue(LocalizedText(meta['name']))
+                DataValue(LocalizedText(meta.get('name', code)))
             )
             node.set_attribute(
                 AttributeIds.Description,
@@ -451,6 +463,127 @@ class OPCServer:
 
         except Exception as e:
             self.logger.error(f"Ошибка создания команды {code}: {e}", exc_info=True)
+            raise
+    # def _create_command_node(self, parent_node, code: str, meta: dict, sim: str) -> None:
+    #     """Создаёт метод команды с уникальным callback"""
+    #     try:
+    #         from opcua.ua import NodeClass, AttributeIds, LocalizedText, DataValue, Variant
+    #
+    #         self.logger.info(f"🔍 Создание команды: {code}")
+    #         self.logger.info(f"   meta keys: {meta.keys()}")
+    #         self.logger.info(f"   has_params: {meta.get('has_params')}")
+    #         self.logger.info(f"   param_schema: {meta.get('param_schema')}")
+    #         self.logger.info(f"   param_schema type: {type(meta.get('param_schema'))}")
+    #
+    #         # ✅ ФОРМИРУЕМ ВХОДНЫЕ АРГУМЕНТЫ
+    #         input_args = []
+    #
+    #         # 🔍 ПРОВЕРЯЕМ УСЛОВИЕ
+    #         has_params = meta.get('has_params')
+    #         param_schema = meta.get('param_schema')
+    #
+    #         self.logger.info(f"   🔍 has_params truthy: {bool(has_params)}")
+    #         self.logger.info(f"   🔍 param_schema truthy: {bool(param_schema)}")
+    #         self.logger.info(f"   🔍 param_schema len: {len(param_schema) if param_schema else 0}")
+    #
+    #         if has_params and param_schema:
+    #             self.logger.info(f"📋 {code}: Создаём input_args...")
+    #
+    #             for i, p in enumerate(param_schema):
+    #                 self.logger.info(f"   Параметр {i}: {p}")
+    #
+    #                 param_type = p.get('type', 'string')
+    #                 param_name = p.get('name', f'param_{i}')
+    #                 param_desc = p.get('desc', '')
+    #
+    #                 dtype = self._get_builtin_node_id(param_type)
+    #
+    #                 self.logger.info(f"   + InputArgument: {param_name} (type={param_type}, dtype={dtype})")
+    #
+    #                 arg = self._create_argument(
+    #                     name=param_name,
+    #                     data_type=dtype,
+    #                     description=param_desc
+    #                 )
+    #
+    #                 input_args.append(arg)
+    #                 self.logger.info(f"   ✅ Добавлен аргумент {i}: {arg.Name}")
+    #         else:
+    #             self.logger.warning(f"⚠️ {code}: НЕ создаём input_args!")
+    #             self.logger.warning(f"   has_params: {has_params}")
+    #             self.logger.warning(f"   param_schema: {param_schema}")
+    #
+    #         self.logger.info(f"📋 {code}: Всего input_args: {len(input_args)}")
+    #
+    #         # ✅ ВЫХОДНЫЕ АРГУМЕНТЫ
+    #         output_args = [
+    #             self._create_argument(
+    #                 name='result_code',
+    #                 data_type=ua.NodeId(ua.ObjectIds.Int32),
+    #                 description='Код результата: 0=OK, <0=Error'
+    #             ),
+    #             self._create_argument(
+    #                 name='result_message',
+    #                 data_type=ua.NodeId(ua.ObjectIds.String),
+    #                 description='Сообщение результата'
+    #             )
+    #         ]
+    #
+    #         self.logger.info(f"📋 {code}: Всего output_args: {len(output_args)}")
+    #
+    #         # ✅ Создаём метод
+    #         def command_callback(method_nodeid, *args):
+    #             return self._on_command_call_with_code(code, sim, method_nodeid, *args)
+    #
+    #         self.logger.info(f"📋 {code}: Вызов add_method()...")
+    #         self.logger.info(f"   input_args: {len(input_args)}")
+    #         self.logger.info(f"   output_args: {len(output_args)}")
+    #
+    #         node = parent_node.add_method(
+    #             ua.NodeId(0, self.idx),
+    #             ua.QualifiedName(code, self.idx),
+    #             command_callback,
+    #             input_args,  # ← ← ← Входные аргументы!
+    #             output_args  # ← ← ← Выходные аргументы!
+    #         )
+    #
+    #         self.logger.info(f"✅ Метод создан: {code}")
+    #         self.logger.info(f"   NodeId: {node.nodeid}")
+    #
+    #         method_node_id = node.nodeid
+    #
+    #         # ✅ Устанавливаем атрибуты
+    #         node.set_attribute(
+    #             AttributeIds.DisplayName,
+    #             DataValue(LocalizedText(meta['name']))
+    #         )
+    #         node.set_attribute(
+    #             AttributeIds.Description,
+    #             DataValue(LocalizedText(meta.get('description', '')))
+    #         )
+    #         node.set_attribute(
+    #             AttributeIds.Executable,
+    #             DataValue(Variant(True, VariantType.Boolean))
+    #         )
+    #         node.set_attribute(
+    #             AttributeIds.UserExecutable,
+    #             DataValue(Variant(True, VariantType.Boolean))
+    #         )
+    #
+    #         # ✅ Сохраняем в кэш
+    #         cache_key = f"{code}:{sim}"
+    #         self._command_nodes[cache_key] = {
+    #             'node': node,
+    #             'node_id': method_node_id,
+    #             'sim': sim,
+    #             'code': code,
+    #             'meta': meta
+    #         }
+    #
+    #         self.logger.info(f"   ✅ Команда {cache_key} создана (NodeId: {method_node_id})")
+    #
+    #     except Exception as e:
+    #         self.logger.error(f"Ошибка создания команды {code}: {e}", exc_info=True)
 
     def _on_command_call_with_code(self, code: str, sim: str, method_nodeid, *args):
         """
