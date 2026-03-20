@@ -19,10 +19,12 @@ class HandlerRegistry:
 
         # ✅ Универсальный обработчик для команд с device_command
         'RESET': lambda db, cfg: DeviceCommandHandler(db, cfg, 'RESET'),
-        'REBOOT': lambda db, cfg: DeviceCommandHandler(db, cfg, 'REBOOT'),
-        'CLEAR_ALARM': lambda db, cfg: DeviceCommandHandler(db, cfg, 'CLEAR_ALARM'),
-        'DIAGNOSTIC': lambda db, cfg: DeviceCommandHandler(db, cfg, 'DIAGNOSTIC'),
-        'CALIBRATE': lambda db, cfg: DeviceCommandHandler(db, cfg, 'CALIBRATE'),
+        'SET_POWER_MODE': lambda db, cfg: DeviceCommandHandler(db, cfg, 'SET_POWER_MODE'),
+        'GET_POWER_MODE': lambda db, cfg: DeviceCommandHandler(db, cfg, 'GET_POWER_MODE'),
+        'GET_CFG2': lambda db, cfg: DeviceCommandHandler(db, cfg, 'GET_CFG2'),
+        'GET_REPORT': lambda db, cfg: DeviceCommandHandler(db, cfg, 'GET_REPORT'),
+        'GET_CFG': lambda db, cfg: DeviceCommandHandler(db, cfg, 'GET_CFG'),
+        'GET_GAS': lambda db, cfg: DeviceCommandHandler(db, cfg, 'GET_GAS'),
     }
 
     def __init__(self, db, config: dict = None):

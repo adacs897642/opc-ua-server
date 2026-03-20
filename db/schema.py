@@ -149,7 +149,8 @@ class SchemaValidator:
                 completed_at timestamptz NULL,
                 retry_count int4 DEFAULT 0,
                 CONSTRAINT commands_queue_command_id_fkey 
-                    FOREIGN KEY (command_id) REFERENCES commands_catalog(id),
+                    FOREIGN KEY (command_id) REFERENCES commands_catalog(id)
+                    ON DELETE CASCADE ON UPDATE CASCADE,
                 CONSTRAINT commands_queue_sim_fkey 
                     FOREIGN KEY (sim) REFERENCES objects_new(sim) 
                     ON DELETE SET NULL ON UPDATE CASCADE
