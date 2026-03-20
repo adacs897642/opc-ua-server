@@ -52,20 +52,18 @@ class SchemaValidator:
 
         'opc_params': """
             CREATE TABLE IF NOT EXISTS public.opc_params (
-                id serial PRIMARY KEY,
-                id_dev int4 NOT NULL,
-                tb int4 NOT NULL,
-                num int4 NOT NULL,
-                alias varchar NOT NULL,
-                name varchar NOT NULL,
-                units varchar NULL,
-                param_type varchar NULL,
-                comment text NULL,
-                description text NULL,
-                pgroup varchar NULL,
-                disp varchar NULL,
-                nico int4 NULL,
-                CONSTRAINT opc_params_tb_alias_key UNIQUE (tb, alias)
+            alias varchar NOT NULL,
+            sim varchar NOT NULL,
+            description varchar DEFAULT ''::character varying NULL,
+            name varchar DEFAULT ''::character varying NULL,
+            unit varchar DEFAULT ''::character varying NULL,
+            comment varchar DEFAULT ''::character varying NULL,
+            param_type varchar DEFAULT 'string'::character varying NULL,
+            CONSTRAINT opc_params_pkey PRIMARY KEY (alias),
+            CONSTRAINT opc_params_sim_fkey 
+                FOREIGN KEY (sim) 
+                REFERENCES public.objects_new(sim) 
+                ON DELETE CASCADE ON UPDATE CASCADE
             )
         """,
 
