@@ -48,21 +48,24 @@ class OpcParamsGenerator:
     QUERY_INSERT_OPC_PARAM = """
         INSERT INTO opc_params (
             alias, sim, name, unit, comment, type, 
-            description
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            description, pgroup, disp
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (alias) DO UPDATE SET
             sim = EXCLUDED.sim,
             name = EXCLUDED.name,
             unit = EXCLUDED.unit,
             comment = EXCLUDED.comment,
             type = EXCLUDED.type,
-            description = EXCLUDED.description                        
+            description = EXCLUDED.description,
+            pgroup = EXCLUDED.pgroup,
+            disp = EXCLUDED.disp            
     """
 
     QUERY_GET_STATS = """
         SELECT 
             COUNT(*) as total,
-            COUNT(DISTINCT sim) as devices            
+            COUNT(DISTINCT sim) as devices,
+            COUNT(DISTINCT pgroup) as groups
         FROM opc_params
     """
 

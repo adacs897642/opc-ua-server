@@ -58,7 +58,9 @@ class SchemaValidator:
             name varchar DEFAULT ''::character varying NULL,
             unit varchar DEFAULT ''::character varying NULL,
             comment varchar DEFAULT ''::character varying NULL,
-            param_type varchar DEFAULT 'string'::character varying NULL,
+            type varchar DEFAULT 'string'::character varying NULL,
+            pgroup varchar DEFAULT ''::character varying NULL,
+	        disp varchar DEFAULT ''::character varying NULL,
             CONSTRAINT opc_params_pkey PRIMARY KEY (alias),
             CONSTRAINT opc_params_sim_fkey 
                 FOREIGN KEY (sim) 
