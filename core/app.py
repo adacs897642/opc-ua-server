@@ -5,6 +5,10 @@
 """
 
 import logging
+import logging.handlers
+import os
+import sys
+from pathlib import Path
 import signal
 from typing import Optional
 
@@ -18,11 +22,85 @@ from opc.commands.hot_reload import CommandHotReload
 from commands.executor import CommandExecutor as BusinessCommandExecutor  # ← ← ← Исполнение
 
 
+def setup_logging(config: dict) -> None:
+    """
+    Настраивает логирование в файл и консоль
+
+    Args:
+        config: Конфигурация из config.json
+    """
+    # ✅ Параметры из конфига
+    log_level = config.get('logging', {}).get('level', 'INFO').upper()
+    log_file = config.get('logging', {}).get('file', '/var/log/opc_server/app.log')
+    log_max_bytes = config.get('logging', {}).get('max_bytes', 10 * 1024 * 1024)  # 10 MB
+    log_backup_count = config.get('logging', {}).get('backup_count', 5)
+    log_format = config.get('logging', {}).get('format', '%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+
+    # ✅ Создаём директорию для логов
+    log_dir = os.path.dirname(log_file)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+
+    # ✅ Корневой логгер
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, log_level, logging.INFO))
+
+    # ✅ Очищаем старые хендлеры (для перезапуска)
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+
+    # ✅ Форматтер
+    formatter = logging.Formatter(log_format, datefmt='%Y-%m-%d %H:%M:%S')
+
+    # ✅ File Handler с ротацией
+    file_handler = logging.handlers.RotatingFileHandler(
+        filename=log_file,
+        maxBytes=log_max_bytes,
+        backupCount=log_backup_count,
+        encoding='utf-8',
+        delay=True  # Не создавать файл пока не будет первая запись
+    )
+    file_handler.setLevel(getattr(logging, log_level, logging.INFO))
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    # ✅ Console Handler (для отладки)
+    if config.get('logging', {}).get('console', True):
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(getattr(logging, log_level, logging.INFO))
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+
+    # ✅ Логирование ошибок в отдельный файл
+    error_file = log_file.replace('.log', '.error.log')
+    error_handler = logging.handlers.RotatingFileHandler(
+        filename=error_file,
+        maxBytes=log_max_bytes,
+        backupCount=log_backup_count,
+        encoding='utf-8',
+        delay=True
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(formatter)
+    root_logger.addHandler(error_handler)
+
+    # ✅ Подавить шумные библиотеки
+    logging.getLogger('opcua').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+    logging.info(f"✅ Логирование настроено: {log_file} (level={log_level})")
+
 class OPCApp:
     """Главный класс приложения"""
 
     def __init__(self, config_path: str):
         self.config = ConfigLoader(config_path)
+        # Загрузить конфиг
+
+        # ✅ Настроить логирование ПЕРЕД всем остальным
+        setup_logging(self.config._config)
+
         self.logger = logging.getLogger('app')
 
         self.db: Optional[Database] = None
