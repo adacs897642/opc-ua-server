@@ -945,6 +945,35 @@ class OPCServer:
             self.logger.error(f"Ошибка обновления параметра {alias}: {e}")
             return False
 
+    def _get_builtin_variant_type(self, type_name: str) -> ua.VariantType:
+        """
+        Преобразует имя типа в VariantType (для Variant)
+
+        Args:
+            type_name: Имя типа (string, int, float, etc.)
+
+        Returns:
+            ua.VariantType: VariantType для использования в Variant()
+        """
+        type_mapping = {
+            'string': ua.VariantType.String,
+            'str': ua.VariantType.String,
+            'int': ua.VariantType.Int32,
+            'integer': ua.VariantType.Int32,
+            'int4': ua.VariantType.Int32,
+            'float': ua.VariantType.Double,
+            'double': ua.VariantType.Double,
+            'real': ua.VariantType.Double,
+            'bool': ua.VariantType.Boolean,
+            'boolean': ua.VariantType.Boolean,
+            'byte': ua.VariantType.Byte,
+            'datetime': ua.VariantType.DateTime,
+            'phone': ua.VariantType.String,
+            'text': ua.VariantType.String,
+        }
+
+        return type_mapping.get(type_name.lower(), ua.VariantType.String)
+
     def _get_builtin_node_id(self, type_name: str) -> ua.NodeId:
         """Возвращает NodeId для встроенного типа данных"""
         type_mapping = {

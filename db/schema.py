@@ -128,8 +128,9 @@ class SchemaValidator:
                 has_params bool DEFAULT false,
                 param_schema jsonb NULL,
                 is_active bool DEFAULT true,
-                created_at timestamptz DEFAULT now(),
-                updated_at timestamptz
+                required_role varchar(50) DEFAULT 'operator'::character varying NULL,
+	            version int4 DEFAULT 1 NULL,
+	            updated_at timestamptz DEFAULT now() NULL
             )
         """,
 
@@ -280,57 +281,136 @@ class SchemaValidator:
         """,
 
         'newvalue': """
+        -- DROP FUNCTION public.newvalue();
             CREATE OR REPLACE FUNCTION public.newvalue()
-            RETURNS trigger AS $$
-            BEGIN
-                -- ✅ UPSERT вместо INSERT + EXCEPTION + UPDATE
-                INSERT INTO pvaluesm1(alias, time, value, valid)
-                VALUES (NEW.alias, NEW.time, NEW.value, NEW.valid)
-                ON CONFLICT (alias) DO UPDATE
-                    SET time = EXCLUDED.time,
-                        value = EXCLUDED.value,
-                        valid = EXCLUDED.valid,
-                        updated_at = now();
-
-                -- ✅ Удаляем из pvalues (перемещение в m1)
-                DELETE FROM pvalues WHERE alias = NEW.alias;
-
-                RETURN NULL;  -- Для BEFORE INSERT триггера
-            END;
-            $$ LANGUAGE plpgsql
-        """,
-
-        'calcspd': """
-            CREATE OR REPLACE FUNCTION public.calcspd()
-            RETURNS trigger AS $$
+             RETURNS trigger
+             LANGUAGE plpgsql
+            AS $function$
             DECLARE
-                val_m1 real;
-                spd real;
+               time_old  timestamp;
+               value_old text;
+               valid_old boolean;
             BEGIN
-                -- ✅ Одно получение предыдущего значения
-                SELECT value::real INTO val_m1 
-                FROM pvaluesm1 
-                WHERE alias = NEW.alias;
-
-                -- ✅ Вычисление скорости (градиента)
-                spd := COALESCE(NEW.value::real, 0) - COALESCE(val_m1, 0);
-
-                -- ✅ Обновляем градиент
-                UPDATE pvalues 
-                SET grad = spd::varchar 
-                WHERE alias = NEW.alias;
-
-                -- ✅ Логирование
-                INSERT INTO pvalues_log(alias, time, value, grad, valid)
-                VALUES (NEW.alias, NEW.time, NEW.value, spd::varchar, NEW.valid);
-
-                -- ✅ Уведомление (без EXECUTE)
-                PERFORM pg_notify(NEW.alias, COALESCE(NEW.value, ''));
-
-                RETURN NULL;  -- Для AFTER INSERT триггера
+            
+            time_old:=  time FROM pvalues WHERE alias=NEW.alias;
+            value_old:= value FROM pvalues WHERE alias=NEW.alias;
+            valid_old:= valid FROM pvalues WHERE alias=NEW.alias;
+            
+            BEGIN
+            INSERT INTO pvaluesM1(alias, time, value, valid) VALUES (NEW.alias, NEW.time, NEW.value, NEW.valid);
+            EXCEPTION
+            WHEN OTHERS THEN
+            UPDATE pvaluesM1 SET time=time_old, value=value_old,valid=valid_old WHERE alias=NEW.alias;
             END;
-            $$ LANGUAGE plpgsql
+            
+            DELETE FROM pvalues WHERE alias=NEW.alias;
+            RETURN NEW;
+            END;
+            $function$
+            ;
         """,
+        # 'newvalue': """
+            # CREATE OR REPLACE FUNCTION public.newvalue()
+            # RETURNS trigger AS $$
+            # BEGIN
+            #     -- ✅ UPSERT вместо INSERT + EXCEPTION + UPDATE
+            #     INSERT INTO pvaluesm1(alias, time, value, valid)
+            #     VALUES (NEW.alias, NEW.time, NEW.value, NEW.valid)
+            #     ON CONFLICT (alias) DO UPDATE
+            #         SET time = EXCLUDED.time,
+            #             value = EXCLUDED.value,
+            #             valid = EXCLUDED.valid,
+            #             updated_at = now();
+            #
+            #     -- ✅ Удаляем из pvalues (перемещение в m1)
+            #     DELETE FROM pvalues WHERE alias = NEW.alias;
+            #
+            #     RETURN NULL;  -- Для BEFORE INSERT триггера
+            # END;
+            # $$ LANGUAGE plpgsql
+        # """,
+        'calcspd': """
+            -- DROP FUNCTION public.calcspd();
+            CREATE OR REPLACE FUNCTION public.calcspd()
+             RETURNS trigger
+             LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+               notifier  text;
+               spd real;
+               tm_cur timestamp;
+               tm_M1 timestamp;
+               val_cur real;
+               val_M1 real;
+            
+            BEGIN
+            
+               tm_cur:= time FROM pvalues WHERE alias=NEW.alias;
+               tm_M1:= time FROM pvaluesM1 WHERE alias=NEW.alias;
+            BEGIN
+               val_cur:= value::real FROM pvalues WHERE alias=NEW.alias;
+               EXCEPTION
+               WHEN OTHERS THEN
+               val_cur:= 0;
+            END;
+            BEGIN
+               val_M1:= value::real FROM pvaluesM1 WHERE alias=NEW.alias;
+               EXCEPTION
+               WHEN OTHERS THEN
+               val_M1:= 0;
+            END;
+            
+            BEGIN
+               spd:=(val_cur-val_M1);
+               EXCEPTION
+               WHEN OTHERS THEN
+               spd:=0;
+            END;
+               UPDATE pvalues SET grad=spd WHERE alias=NEW.alias;
+            
+               INSERT INTO pvalues_log(alias,time,value,grad,valid)
+               VALUES (NEW.alias, NEW.time, NEW.value, spd, NEW.valid);
+               notifier := 'NOTIFY "' || NEW.alias || '"';
+               EXECUTE notifier;
+               NOTIFY pvalues;
+            
+            RETURN NEW;
+            END;
+            $function$
+            ;
+
+        """
+        # 'calcspd': """
+        #     CREATE OR REPLACE FUNCTION public.calcspd()
+        #     RETURNS trigger AS $$
+        #     DECLARE
+        #         val_m1 real;
+        #         spd real;
+        #     BEGIN
+        #         -- ✅ Одно получение предыдущего значения
+        #         SELECT value::real INTO val_m1
+        #         FROM pvaluesm1
+        #         WHERE alias = NEW.alias;
+        #
+        #         -- ✅ Вычисление скорости (градиента)
+        #         spd := COALESCE(NEW.value::real, 0) - COALESCE(val_m1, 0);
+        #
+        #         -- ✅ Обновляем градиент
+        #         UPDATE pvalues
+        #         SET grad = spd::varchar
+        #         WHERE alias = NEW.alias;
+        #
+        #         -- ✅ Логирование
+        #         INSERT INTO pvalues_log(alias, time, value, grad, valid)
+        #         VALUES (NEW.alias, NEW.time, NEW.value, spd::varchar, NEW.valid);
+        #
+        #         -- ✅ Уведомление (без EXECUTE)
+        #         PERFORM pg_notify(NEW.alias, COALESCE(NEW.value, ''));
+        #
+        #         RETURN NULL;  -- Для AFTER INSERT триггера
+        #     END;
+        #     $$ LANGUAGE plpgsql
+        # """,
     }
 
     def __init__(self, db_connection):

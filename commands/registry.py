@@ -33,7 +33,7 @@ class HandlerRegistry:
         self.config = config.get('commands', {}) if config else {}
         self.logger = logging.getLogger('commands.registry')
         self._instances = {}
-
+        self.logger.info(f'commands.registry {self.config}')
         self.logger.info(f"📁 Command dir from config: {self.config.get('command_dir', 'device_commands')}")
 
         self._initialize_handlers()

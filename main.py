@@ -9,9 +9,7 @@ import argparse
 import logging
 from core.app import OPCApp
 from utils.logging_config import setup_logging
-from db.migrations.generate_opc_params import OpcParamsGenerator
-from config.loader import ConfigLoader
-from db.connection import Database
+
 
 # Уменьшить уровень логирования для OPC UA (если слишком много сообщений)
 #logging.getLogger('opcua.server.uaprocessor').setLevel(logging.WARNING)
@@ -24,13 +22,39 @@ logging.getLogger('opcua').setLevel(logging.INFO)
 
 
 def main():
+    # ✅ Настройка парсера аргументов
     parser = argparse.ArgumentParser(description='OPC UA Server')
-    parser.add_argument('config', nargs='?', default='config.json',
-                        help='Путь к конфигурации')
-    parser.add_argument('--migrate-opc-params', action='store_true',
-                        help='Запустить миграцию opc_params перед запуском')
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Режим сухой проверки для миграции')
+
+    parser.add_argument(
+        'config',
+        nargs='?',  # ← ← ← Опциональный позиционный аргумент
+        default='config.json',
+        help='Путь к файлу конфигурации (по умолчанию: config.json)'
+    )
+
+    parser.add_argument(
+        '--migrate-opc-params',
+        action='store_true',
+        help='Выполнить миграцию параметров из opc_params'
+    )
+
+    parser.add_argument(
+        '--migrate-schema',
+        action='store_true',
+        help='Выполнить миграцию схемы БД'
+    )
+
+    parser.add_argument(
+        '--check-schema',
+        action='store_true',
+        help='Проверить схему БД и выйти'
+    )
+
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Включить debug логирование'
+    )
 
     args = parser.parse_args()
 
@@ -40,22 +64,52 @@ def main():
         format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
     )
 
-    # Миграция opc_params (если запрошено)
+    logger = logging.getLogger('main')
+
+    # ✅ Выполнить миграции если указано
     if args.migrate_opc_params:
-        logger = logging.getLogger('main')
-        logger.info("🔄 Запуск миграции opc_params...")
+        logger.info("📈 Запуск миграции opc_params...")
+        from db.migrations.generate_opc_params import OpcParamsGenerator
+        from config.loader import ConfigLoader
+        from db.connection import Database
+        config = ConfigLoader(args.config)
+        db = Database(config.db_config)
+
+        OpcParamsGenerator(db)
+
+        logger.info("✅ Миграция завершена успешно")
+        return 0  # ← ← ← Выйти после миграции!
+
+    if args.migrate_schema:
+        logger.info("📈 Запуск миграции схемы...")
+        from db.migrations.generate_opc_params import OpcParamsGenerator
+        from config.loader import ConfigLoader
+        from db.connection import Database
 
         config = ConfigLoader(args.config)
         db = Database(config.db_config)
 
-        generator = OpcParamsGenerator(db, dry_run=args.dry_run)
-        stats = generator.generate()
+        OpcParamsGenerator(db)
 
-        if stats['errors'] > 0:
-            logger.error(f"❌ Миграция завершилась с ошибками: {stats['errors']}")
+        logger.info("✅ Миграция схемы завершена")
+        return 0
+
+    if args.check_schema:
+        logger.info("🔍 Проверка схемы БД...")
+        from db.connection import Database
+        from config.loader import ConfigLoader
+
+        config = ConfigLoader(args.config)
+        db = Database(config.db_config)
+
+        report = db.validate_schema(auto_fix=False)
+
+        if report.get('is_valid'):
+            logger.info("✅ Схема валидна")
+            return 0
+        else:
+            logger.error("❌ Схема не валидна")
             return 1
-
-        logger.info("✅ Миграция завершена успешно")
 
     config_path = sys.argv[1] if len(sys.argv) > 1 else 'config.json'
 

@@ -35,7 +35,7 @@ class OPCTypeMapper:
     @classmethod
     def get_variant_type(cls, type_str: str) -> VariantType:
         """Получает OPC UA тип по строковому описанию"""
-        return cls.TYPE_MAP.get(type_str.lower(), VariantType.Variant)
+        return cls.TYPE_MAP.get(type_str.lower(), VariantType.String)
 
     @classmethod
     def guess_variant_type(cls, value: Any) -> VariantType:

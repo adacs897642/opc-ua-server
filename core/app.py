@@ -167,7 +167,8 @@ class OPCApp:
         # ✅ Исполнитель команд (бизнес-логика)
         self.command_executor = BusinessCommandExecutor(
             db=self.db,
-            config=self.config.get('commands', {})
+            config=self.config or {}
+            # .get('commands', {})
         )
         self.command_executor.start()
 
