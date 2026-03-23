@@ -100,21 +100,45 @@ class DataLoader:
             self.logger.error(f"Ошибка загрузки телеметрии: {e}", exc_info=True)
             return {}
 
-    def get_parameter_value(self, alias: str) -> Optional[Tuple[Any, datetime]]:
-        """
-        Получает последнее значение параметра
+    # data/loader.py (или где у вас этот метод)
 
-        Args:
-            alias: Идентификатор параметра
+    def get_parameter_value(self, alias: str) -> Optional[tuple]:
+        """
+        Получает значение параметра из БД
 
         Returns:
-            (value, timestamp) или None
+            tuple: (value, timestamp) или None если нет данных
         """
-        rows = self.db.query(
-            queries.GET_PARAMETER_VALUE,
-            (alias,)
-        )
-        return rows[0] if rows else None
+        try:
+            rows = self.db.query(
+                queries.GET_PARAMETER_VALUE,  # Ваш SQL запрос
+                (alias,)
+            )
+
+            # ✅ ПРОВЕРКА: rows не None и не пустой
+            if not rows:
+                return None
+
+            # ✅ ПРОВЕРКА: первая строка не None
+            row = rows[0]
+            if row is None:
+                return None
+
+            # ✅ ПРОВЕРКА: строка имеет минимум 2 элемента
+            if len(row) < 2:
+                self.logger.warning(f"⚠️ Недостаточно данных для {alias}: {row}")
+                return None
+
+            # ✅ Вернуть ТОЛЬКО (value, timestamp)
+            value = row[0]
+            timestamp = row[1]
+
+            return (value, timestamp)  # ← ← ← Кортеж из 2 элементов!
+
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка получения значения {alias}: {e}")
+            return None
+
 
     def get_parameter_nico(self, alias: str) -> Optional[int]:
         """

@@ -632,13 +632,14 @@ class NodeCreator:
 
             # Конвертируем значение
             converted_value = OPCTypeMapper.convert_value(value, variant_type)
-
+            # ✅ Используем lowercase параметры для opcua>=1.0.0
+            # Для opcua<1.0.0 использовать: Value, StatusCode, SourceTimestamp, ServerTimestamp
             # Создаем DataValue с метаданными
             data_value = DataValue(
-                Value=Variant(converted_value, variant_type),
-                StatusCode=status,
-                SourceTimestamp=source_timestamp,
-                ServerTimestamp=server_timestamp
+                variant=Variant(converted_value, variant_type),
+                status=status,
+                sourceTimestamp=source_timestamp,
+                serverTimestamp=server_timestamp
             )
 
             node.set_value(data_value)

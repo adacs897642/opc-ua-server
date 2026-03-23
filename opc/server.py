@@ -30,12 +30,14 @@ from opc.types import OPCTypeMapper
 from opc.commands.registry import OpcCommandRegistry
 from opc.status_codes import status_determiner
 from opcua.common.manage_nodes import create_method as create_method_node
+from opc.utils.helpers import safe_variant
 
 logger = logging.getLogger(__name__)
 
 
 class OPCServer:
     """Управление OPC UA сервером"""
+
     def __init__(self, config: dict, db: Database):
         self.config = config
         self.db = db
@@ -464,126 +466,6 @@ class OPCServer:
         except Exception as e:
             self.logger.error(f"Ошибка создания команды {code}: {e}", exc_info=True)
             raise
-    # def _create_command_node(self, parent_node, code: str, meta: dict, sim: str) -> None:
-    #     """Создаёт метод команды с уникальным callback"""
-    #     try:
-    #         from opcua.ua import NodeClass, AttributeIds, LocalizedText, DataValue, Variant
-    #
-    #         self.logger.info(f"🔍 Создание команды: {code}")
-    #         self.logger.info(f"   meta keys: {meta.keys()}")
-    #         self.logger.info(f"   has_params: {meta.get('has_params')}")
-    #         self.logger.info(f"   param_schema: {meta.get('param_schema')}")
-    #         self.logger.info(f"   param_schema type: {type(meta.get('param_schema'))}")
-    #
-    #         # ✅ ФОРМИРУЕМ ВХОДНЫЕ АРГУМЕНТЫ
-    #         input_args = []
-    #
-    #         # 🔍 ПРОВЕРЯЕМ УСЛОВИЕ
-    #         has_params = meta.get('has_params')
-    #         param_schema = meta.get('param_schema')
-    #
-    #         self.logger.info(f"   🔍 has_params truthy: {bool(has_params)}")
-    #         self.logger.info(f"   🔍 param_schema truthy: {bool(param_schema)}")
-    #         self.logger.info(f"   🔍 param_schema len: {len(param_schema) if param_schema else 0}")
-    #
-    #         if has_params and param_schema:
-    #             self.logger.info(f"📋 {code}: Создаём input_args...")
-    #
-    #             for i, p in enumerate(param_schema):
-    #                 self.logger.info(f"   Параметр {i}: {p}")
-    #
-    #                 param_type = p.get('type', 'string')
-    #                 param_name = p.get('name', f'param_{i}')
-    #                 param_desc = p.get('desc', '')
-    #
-    #                 dtype = self._get_builtin_node_id(param_type)
-    #
-    #                 self.logger.info(f"   + InputArgument: {param_name} (type={param_type}, dtype={dtype})")
-    #
-    #                 arg = self._create_argument(
-    #                     name=param_name,
-    #                     data_type=dtype,
-    #                     description=param_desc
-    #                 )
-    #
-    #                 input_args.append(arg)
-    #                 self.logger.info(f"   ✅ Добавлен аргумент {i}: {arg.Name}")
-    #         else:
-    #             self.logger.warning(f"⚠️ {code}: НЕ создаём input_args!")
-    #             self.logger.warning(f"   has_params: {has_params}")
-    #             self.logger.warning(f"   param_schema: {param_schema}")
-    #
-    #         self.logger.info(f"📋 {code}: Всего input_args: {len(input_args)}")
-    #
-    #         # ✅ ВЫХОДНЫЕ АРГУМЕНТЫ
-    #         output_args = [
-    #             self._create_argument(
-    #                 name='result_code',
-    #                 data_type=ua.NodeId(ua.ObjectIds.Int32),
-    #                 description='Код результата: 0=OK, <0=Error'
-    #             ),
-    #             self._create_argument(
-    #                 name='result_message',
-    #                 data_type=ua.NodeId(ua.ObjectIds.String),
-    #                 description='Сообщение результата'
-    #             )
-    #         ]
-    #
-    #         self.logger.info(f"📋 {code}: Всего output_args: {len(output_args)}")
-    #
-    #         # ✅ Создаём метод
-    #         def command_callback(method_nodeid, *args):
-    #             return self._on_command_call_with_code(code, sim, method_nodeid, *args)
-    #
-    #         self.logger.info(f"📋 {code}: Вызов add_method()...")
-    #         self.logger.info(f"   input_args: {len(input_args)}")
-    #         self.logger.info(f"   output_args: {len(output_args)}")
-    #
-    #         node = parent_node.add_method(
-    #             ua.NodeId(0, self.idx),
-    #             ua.QualifiedName(code, self.idx),
-    #             command_callback,
-    #             input_args,  # ← ← ← Входные аргументы!
-    #             output_args  # ← ← ← Выходные аргументы!
-    #         )
-    #
-    #         self.logger.info(f"✅ Метод создан: {code}")
-    #         self.logger.info(f"   NodeId: {node.nodeid}")
-    #
-    #         method_node_id = node.nodeid
-    #
-    #         # ✅ Устанавливаем атрибуты
-    #         node.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText(meta['name']))
-    #         )
-    #         node.set_attribute(
-    #             AttributeIds.Description,
-    #             DataValue(LocalizedText(meta.get('description', '')))
-    #         )
-    #         node.set_attribute(
-    #             AttributeIds.Executable,
-    #             DataValue(Variant(True, VariantType.Boolean))
-    #         )
-    #         node.set_attribute(
-    #             AttributeIds.UserExecutable,
-    #             DataValue(Variant(True, VariantType.Boolean))
-    #         )
-    #
-    #         # ✅ Сохраняем в кэш
-    #         cache_key = f"{code}:{sim}"
-    #         self._command_nodes[cache_key] = {
-    #             'node': node,
-    #             'node_id': method_node_id,
-    #             'sim': sim,
-    #             'code': code,
-    #             'meta': meta
-    #         }
-    #
-    #         self.logger.info(f"   ✅ Команда {cache_key} создана (NodeId: {method_node_id})")
-    #
-    #     except Exception as e:
-    #         self.logger.error(f"Ошибка создания команды {code}: {e}", exc_info=True)
 
     def _on_command_call_with_code(self, code: str, sim: str, method_nodeid, *args):
         """
@@ -814,14 +696,53 @@ class OPCServer:
         except Exception as e:
             self.logger.error(f"Ошибка создания узла {param.alias}: {e}", exc_info=True)
 
+    # opc/server.py
+
+    def _node_id_to_variant_type(self, node_id: ua.NodeId) -> ua.VariantType:
+        """Конвертирует NodeId в VariantType"""
+        mapping = {
+            ua.ObjectIds.String: VariantType.String,
+            ua.ObjectIds.Int32: VariantType.Int32,
+            ua.ObjectIds.Int64: VariantType.Int64,
+            ua.ObjectIds.Double: VariantType.Double,
+            ua.ObjectIds.Float: VariantType.Float,
+            ua.ObjectIds.Boolean: VariantType.Boolean,
+            ua.ObjectIds.DateTime: VariantType.DateTime,
+            ua.ObjectIds.Byte: VariantType.Byte,
+            ua.ObjectIds.UInt32: VariantType.UInt32,
+        }
+
+        if hasattr(node_id, 'Identifier'):
+            return mapping.get(node_id.Identifier, VariantType.String)
+        return VariantType.String
+
+    def _get_default_value(self, variant_type: VariantType) -> tuple:
+        """Возвращает дефолтное значение для типа"""
+
+        # ✅ Прямой маппинг (без массивов)
+        if variant_type == VariantType.String:
+            return ("", False)
+        elif variant_type in (VariantType.Int32, VariantType.Int64):
+            return (0, False)
+        elif variant_type in (VariantType.Double, VariantType.Float):
+            return (0.0, False)
+        elif variant_type in (VariantType.Boolean,):
+            return (False, False)
+        elif variant_type == VariantType.DateTime:
+            return (datetime.now(timezone.utc), False)
+        elif variant_type == VariantType.Byte:
+            return (0, False)
+        elif variant_type == VariantType.UInt32:
+            return (0, False)
+
+        # ✅ По умолчанию
+        return ("", False)
+
+    # opc/server.py
+
     def update_parameter(self, alias: str) -> bool:
-        """
-        Обновляет значение параметра и Property StatusMessage
-        Args:
-            alias: Алиас параметра
-        Returns:
-            True если успешно
-        """
+        """Обновляет значение параметра"""
+
         if alias not in self._telemetry_nodes:
             return False
 
@@ -830,44 +751,61 @@ class OPCServer:
             node = info['node']
             status_prop = info.get('status_prop_node')
 
-            # Получаем данные из БД
+            # ✅ Получаем данные из БД
             value_data = self.data_loader.get_parameter_value(alias)
 
-            # ❌ НЕТ ДАННЫХ
-            if not value_data:
-                status_code = StatusCode(0x80000005)  # Bad_NoData
-                status_message = "Нет данных"
-
-                # Временные метки (текущее время т.к. данных нет)
-                now = datetime.now(timezone.utc)
-                source_ts = now
-                server_ts = now
-
-
-                # Обновляем основной узел
-                node.set_value(DataValue(
-                    variant=Variant(0, VariantType.Double),
-                    status=StatusCode(status_code.value if hasattr(status_code, 'value') else status_code),
-                    sourceTimestamp=source_ts,
-                    serverTimestamp=server_ts
-                ))
-
-                # ✅ Обновляем Property с ТАКИМИ ЖЕ timestamps
-                if status_prop:
-                    status_prop.set_value(DataValue(
-                        variant=Variant(status_message, VariantType.String),
-                        status=StatusCode(0x00000000),
-                        sourceTimestamp=source_ts,  # ← ТО ЖЕ!
-                        serverTimestamp=server_ts  # ← ТО ЖЕ!
-                    ))
-
+            # ✅ ПРОВЕРКА
+            if not value_data or not isinstance(value_data, tuple) or len(value_data) < 2:
+                self.logger.debug(f"📋 Нет данных для {alias}")
+                self._set_no_data_status(node, status_prop)
                 return False
 
-            # ✅ ЕСТЬ ДАННЫЕ
-            value, timestamp = value_data  # ← timestamp из БД
-            nico = self.data_loader.get_parameter_nico(alias)
+            value, timestamp = value_data
 
-            # Определение статуса
+            if timestamp is None:
+                timestamp = datetime.now(timezone.utc)
+
+            nico = self.data_loader.get_parameter_nico(alias) or 0
+
+            # ✅ Получаем тип данных: NodeId → VariantType
+            node_id = node.get_data_type()
+            variant_type = self._node_id_to_variant_type(node_id)
+
+            # ✅ Обработка None значения
+            if value is None:
+                # ✅ Простой вариант: прямой маппинг
+                if variant_type == VariantType.String:
+                    safe_value = ""
+                elif variant_type in (VariantType.Int32, VariantType.Int64):
+                    safe_value = 0
+                elif variant_type in (VariantType.Double, VariantType.Float):
+                    safe_value = 0.0
+                elif variant_type == VariantType.Boolean:
+                    safe_value = False
+                elif variant_type == VariantType.DateTime:
+                    safe_value = datetime.now(timezone.utc)
+                elif variant_type == VariantType.Byte:
+                    safe_value = 0
+                else:
+                    safe_value = ""  # Fallback
+
+                self.logger.debug(f"⚠️ {alias}: value=None → default={safe_value} ({variant_type})")
+                variant = Variant(safe_value, variant_type)
+            else:
+                # ✅ Конвертация строки в datetime
+                if variant_type == VariantType.DateTime and isinstance(value, str):
+                    try:
+                        value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    except Exception:
+                        value = datetime.now(timezone.utc)
+
+                variant = Variant(value, variant_type)
+
+            # ✅ Временные метки
+            source_ts = timestamp
+            server_ts = datetime.now(timezone.utc)
+
+            # ✅ Определение статуса
             status_code, status_message = status_determiner.get_status(
                 alias=alias,
                 value=value,
@@ -876,65 +814,29 @@ class OPCServer:
                 nico=nico
             )
 
-            # ✅ ВРЕМЕННЫЕ МЕТКИ (одинаковые для Value и Property!)
-            source_ts = timestamp  # ← Из БД (время получения)
-            server_ts = datetime.now(timezone.utc)  # ← Время обработки сервером
-
-            # Обновляем основной узел
-            # В блоке "ЕСТЬ ДАННЫЕ", перед node.set_value():
-
-            variant_type = node.get_data_type()
-
-            # ✅ Обработка None перед созданием Variant
-            if value is None:
-                if variant_type == ua.NodeId(ua.ObjectIds.DateTime):
-                    safe_value = []  # Пустой массив для DateTime
-                    is_array = True
-                elif variant_type in (ua.NodeId(ua.ObjectIds.Int32), ua.NodeId(ua.ObjectIds.Double)):
-                    safe_value = 0  # Ноль для чисел
-                    is_array = False
-                elif variant_type == ua.NodeId(ua.ObjectIds.String):
-                    safe_value = ""  # Пустая строка
-                    is_array = False
-                else:
-                    safe_value = []
-                    is_array = True
-
-                variant = Variant(safe_value, variant_type, is_array=is_array)
-            else:
-                # Конвертация строки в datetime для DateTime типа
-                if variant_type == ua.NodeId(ua.ObjectIds.DateTime) and isinstance(value, str):
-                    try:
-                        value = datetime.fromisoformat(value.replace('Z', '+00:00'))
-                    except:
-                        value = datetime.now(timezone.utc)
-
-                variant = Variant(value, variant_type)
-
-            # Теперь используем safe variant
+            # ✅ Обновляем узел
             node.set_value(DataValue(
                 variant=variant,
-                status=StatusCode(...),
+                status=status_code,
                 sourceTimestamp=source_ts,
                 serverTimestamp=server_ts
             ))
 
-            # ✅ Обновляем Property с ТАКИМИ ЖЕ timestamps!
+            # ✅ Обновляем Property
             if status_prop:
                 status_prop.set_value(DataValue(
                     variant=Variant(status_message, VariantType.String),
                     status=StatusCode(0x00000000),
-                    sourceTimestamp=source_ts,  # ← ТО ЖЕ ИЗ БД!
-                    serverTimestamp=server_ts  # ← ТО ЖЕ ТЕКУЩЕЕ!
+                    sourceTimestamp=source_ts,
+                    serverTimestamp=server_ts
                 ))
 
-            # Логирование изменений статуса
+            # ✅ Логирование
             if status_code != info.get('last_status'):
                 self.logger.info(
                     f"Параметр {alias}: nico={nico}, "
                     f"Status: {status_code}, "
-                    f"Message: {status_message}, "
-                    f"SourceTS: {source_ts}"
+                    f"Message: {status_message}"
                 )
                 info['last_status'] = status_code
                 info['last_status_message'] = status_message
@@ -942,8 +844,25 @@ class OPCServer:
             return True
 
         except Exception as e:
-            self.logger.error(f"Ошибка обновления параметра {alias}: {e}")
+            self.logger.error(f"❌ Ошибка обновления {alias}: {e}", exc_info=True)
             return False
+
+    def _set_no_data_status(self, node, status_prop):
+        """Устанавливает статус 'Нет данных'"""
+        now = datetime.now(timezone.utc)
+        node.set_value(DataValue(
+            variant=Variant(0.0, VariantType.Double),  # ✅ Не None!
+            status=StatusCode(0x80000005),  # Bad_NoData
+            sourceTimestamp=now,
+            serverTimestamp=now
+        ))
+        if status_prop:
+            status_prop.set_value(DataValue(
+                variant=Variant("Нет данных", VariantType.String),
+                status=StatusCode(0x00000000),
+                sourceTimestamp=now,
+                serverTimestamp=now
+            ))
 
     def _get_builtin_variant_type(self, type_name: str) -> ua.VariantType:
         """
@@ -1156,5 +1075,3 @@ class OPCServer:
 
         # 3. Всё хорошо
         return StatusCode(StatusCodes.Good)  # ✅ Данные валидны
-
-
