@@ -63,6 +63,7 @@ class OPCServer:
         srv_cfg = self.config.get('server', {})
         app_cfg = self.config.get('app', {})
 
+
         # 1. Создаём сервер
         self.server = Server()
 
@@ -89,7 +90,7 @@ class OPCServer:
         self.logger.info(f"OPC UA сервер запущен: {endpoint_url}")
 
         # Инициализация загрузчиков
-        default_period = self.config.get('polling.default_period_min', 1440)
+        # default_period = self.config.get('polling.default_period_min', 1440)
         # self.data_loader = DataLoader(self.db, default_period)
         self.data_loader = DataLoader(self.db, self.config)
         self.opc_command_registry = OpcCommandRegistry(self.db)

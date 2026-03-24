@@ -42,7 +42,7 @@ class TelemetryData:
         self.obj_name = safe_str(0)
         self.sim = safe_str(1)
         self.lpu = safe_str(2)
-        self.period = safe_int(3, 5)  # period из запроса (tp.t1*2 или дефолт)
+        self.period = safe_int(3, 1440)  # period из запроса (tp.t1*2 или дефолт)
         self.alias = safe_str(4)
         self.name = safe_str(5)
         self.unit = safe_str(6)
@@ -90,7 +90,7 @@ class DataLoader:
             default_period_min = int(config)
         else:
             self.config = {}
-
+        self.logger.info(f"📊 DataLoader инициализирован: {self.config}")
         # ✅ Определить default_period_min
         if default_period_min is not None:
             # Явно переданный период имеет приоритет
@@ -99,7 +99,7 @@ class DataLoader:
             # Из конфига: polling.update_interval_sec в секундах → минуты
             polling_config = self.config.get('polling', {})
             update_interval_sec = polling_config.get('update_interval_sec', 300)
-            self.default_period_min = update_interval_sec // 60
+            self.default_period_min = polling_config.get('default_period_min', 900)
 
         self.logger.info(f"📊 DataLoader инициализирован: default_period_min={self.default_period_min}")
 
