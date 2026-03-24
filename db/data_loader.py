@@ -19,27 +19,41 @@ logger = logging.getLogger(__name__)
 
 class TelemetryData:
     """Модель данных телеметрии (обновлённая)"""
+    """
+        Данные параметра телеметрии
+
+        Ожидает кортеж из 15 элементов в порядке:
+        0:obj_name, 1:sim, 2:lpu, 3:period, 4:alias, 5:name, 6:unit,
+        7:comment, 8:param_type, 9:description, 10:value, 11:timestamp,
+        12:nico, 13:pgroup, 14:disp
+        """
 
     def __init__(self, row: tuple):
-        (
-            self.obj_name,
-            self.sim,
-            self.lpu,
-            self.period,
-            self.alias,
-            self.name,
-            self.unit,
-            self.comment,
-            self.param_type,
-            self.description,
-            self.value,
-            self.timestamp,
-            self.nico,
-            self.pgroup,  # ← Добавлено
-            self.disp  # ← Добавлено
-        ) = row
+        # ✅ Безопасное извлечение с проверкой длины
+        def safe_str(idx, default=''):
+            return str(row[idx]) if len(row) > idx and row[idx] is not None else default
 
-        self.device_key = f"{self.sim}"
+        def safe_int(idx, default=0):
+            try:
+                return int(row[idx]) if len(row) > idx and row[idx] is not None else default
+            except (ValueError, TypeError):
+                return default
+
+        self.obj_name = safe_str(0)
+        self.sim = safe_str(1)
+        self.lpu = safe_str(2)
+        self.period = safe_int(3, 5)  # period из запроса (tp.t1*2 или дефолт)
+        self.alias = safe_str(4)
+        self.name = safe_str(5)
+        self.unit = safe_str(6)
+        self.comment = safe_str(7)
+        self.param_type = safe_str(8, 'string')
+        self.description = safe_str(9)
+        self.value = row[10] if len(row) > 10 else None  # value из pvalues
+        self.timestamp = row[11] if len(row) > 11 else None  # time из pvalues
+        self.nico = safe_int(12)  # nico из pcoords
+        self.pgroup = safe_str(13)  # группа для OPC UA структуры
+        self.disp = safe_int(14)  # отображение (из varchar в int)
 
     def get_display_unit(self) -> str:
         """Возвращает единицу для отображения"""
@@ -48,7 +62,6 @@ class TelemetryData:
     def __repr__(self) -> str:
         return f"TelemetryData(alias='{self.alias}', group='{self.pgroup}', value={self.value})"
 
-
     # def __repr__(self) -> str:
     #     return f"TelemetryData(alias='{self.alias}', value={self.value})"
 
@@ -56,12 +69,74 @@ class TelemetryData:
 class DataLoader:
     """Загружает телеметрию из базы данных"""
 
-    def __init__(self, db: Database, default_period_min: int = 1440):
+    def __init__(self, db, config: dict = None, default_period_min: int = None):
+        """
+        Инициализация DataLoader
+
+        Args:
+            db: Экземпляр Database
+            config: Словарь конфигурации (опционально)
+            default_period_min: Дефолтный период в минутах (опционально, приоритет над config)
+        """
         self.db = db
-        self.default_period = default_period_min
-        self.logger = logging.getLogger('db.loader')
+        self.logger = logging.getLogger('db.data_loader')
+
+        # ✅ Обработать config: может быть dict или int (для обратной совместимости)
+        if isinstance(config, dict):
+            self.config = config
+        elif isinstance(config, (int, float)):
+            # ← ← ← Старый вызов: DataLoader(db, default_period)
+            self.config = {}
+            default_period_min = int(config)
+        else:
+            self.config = {}
+
+        # ✅ Определить default_period_min
+        if default_period_min is not None:
+            # Явно переданный период имеет приоритет
+            self.default_period_min = int(default_period_min)
+        else:
+            # Из конфига: polling.update_interval_sec в секундах → минуты
+            polling_config = self.config.get('polling', {})
+            update_interval_sec = polling_config.get('update_interval_sec', 300)
+            self.default_period_min = update_interval_sec // 60
+
+        self.logger.info(f"📊 DataLoader инициализирован: default_period_min={self.default_period_min}")
 
     def load_telemetry(self) -> Dict[str, List[TelemetryData]]:
+        """
+        Загружает все параметры телеметрии из БД
+
+        Returns:
+            Dict[str, List[TelemetryData]]: {sim: [TelemetryData, ...], ...}
+        """
+        try:
+            # ✅ ВЫЗВАТЬ ЗАПРОС С ПАРАМЕТРОМ!
+            rows = self.db.query(queries.LOAD_TELEMETRY, (self.default_period_min,))
+
+            # ✅ Сгруппировать по SIM
+            telemetry_by_sim: Dict[str, List[TelemetryData]] = {}
+
+            for row in rows:
+                sim = row[1] if len(row) > 1 else ''
+
+                if sim not in telemetry_by_sim:
+                    telemetry_by_sim[sim] = []
+
+                # ✅ Создать TelemetryData из строки БД
+                param_data = TelemetryData(row)
+                telemetry_by_sim[sim].append(param_data)
+
+            total = sum(len(v) for v in telemetry_by_sim.values())
+            self.logger.info(f"📊 Загружено {total} параметров для {len(telemetry_by_sim)} устройств")
+
+            return telemetry_by_sim
+
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка загрузки телеметрии: {e}", exc_info=True)
+            return {}
+
+    def load_telemetry2(self) -> Dict[str, List[TelemetryData]]:
         """
         Загружает все данные телеметрии
 
@@ -138,7 +213,6 @@ class DataLoader:
         except Exception as e:
             self.logger.error(f"❌ Ошибка получения значения {alias}: {e}")
             return None
-
 
     def get_parameter_nico(self, alias: str) -> Optional[int]:
         """
@@ -246,7 +320,6 @@ class DataLoader:
                 'disp': row[7]
             })
         return params
-
 
     def get_devices(self) -> List[dict]:
         """

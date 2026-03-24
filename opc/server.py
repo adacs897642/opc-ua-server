@@ -90,7 +90,8 @@ class OPCServer:
 
         # Инициализация загрузчиков
         default_period = self.config.get('polling.default_period_min', 1440)
-        self.data_loader = DataLoader(self.db, default_period)
+        # self.data_loader = DataLoader(self.db, default_period)
+        self.data_loader = DataLoader(self.db, self.config)
         self.opc_command_registry = OpcCommandRegistry(self.db)
 
         # Создание структуры
@@ -174,48 +175,183 @@ class OPCServer:
             logger.error(f"Ошибка получения сессий: {e}")
             return []
 
+    # def create_address_space(self) -> None:
+    #     """Создаёт адресное пространство сервера"""
+    #     try:
+    #         objects_node = self.server.get_objects_node()
+    #         devices = self.data_loader.get_devices()
+    #
+    #         # ✅ ОТЛАДКА: ПРОВЕРИТЬ ЧТО В registry.commands
+    #         self.logger.info(f"🔍 opc_command_registry.commands keys: {list(self.opc_command_registry.commands.keys())}")
+    #
+    #         for code, meta in self.opc_command_registry.commands.items():
+    #             self.logger.info(f"🔍 {code} в registry:")
+    #             self.logger.info(f"   has_params: {meta.get('has_params')}")
+    #             self.logger.info(f"   param_schema: {meta.get('param_schema')}")
+    #             self.logger.info(f"   param_schema len: {len(meta.get('param_schema', []))}")
+    #
+    #         # ✅ Получаем команды
+    #         commands = self.opc_command_registry.commands
+    #
+    #         for obj_data in devices:
+    #             obj_name = obj_data.get('name', 'Unknown')
+    #             obj_sim = obj_data.get('sim')
+    #
+    #             if not obj_sim:
+    #                 continue
+    #
+    #             # ✅ ОТЛАДКА: ПРОВЕРИТЬ ПЕРЕД СОЗДАНИЕМ
+    #             self.logger.info(f"🔍 Перед созданием {obj_name}:")
+    #             for code, meta in commands.items():
+    #                 if code == 'SET_CONFIG':
+    #                     self.logger.info(f"   SET_CONFIG param_schema: {meta.get('param_schema')}")
+    #
+    #             self._create_device_object(
+    #                 objects_node,
+    #                 obj_name,
+    #                 obj_data,
+    #                 commands  # ← ← ← Передаём commands
+    #             )
+    #
+    #         self.logger.info("✅ Адресное пространство создано")
+    #
+    #     except Exception as e:
+    #         self.logger.error(f"Ошибка создания адресного пространства: {e}", exc_info=True)
+    # opc/server.py
+
+    # opc/server.py
+
     def create_address_space(self) -> None:
-        """Создаёт адресное пространство сервера"""
+        """Создаёт адресное пространство сервера из БД"""
         try:
             objects_node = self.server.get_objects_node()
-            devices = self.data_loader.get_devices()
 
-            # ✅ ОТЛАДКА: ПРОВЕРИТЬ ЧТО В registry.commands
-            self.logger.info(f"🔍 opc_command_registry.commands keys: {list(self.opc_command_registry.commands.keys())}")
+            self.logger.info("📊 Загрузка телеметрии из БД...")
 
-            for code, meta in self.opc_command_registry.commands.items():
-                self.logger.info(f"🔍 {code} в registry:")
-                self.logger.info(f"   has_params: {meta.get('has_params')}")
-                self.logger.info(f"   param_schema: {meta.get('param_schema')}")
-                self.logger.info(f"   param_schema len: {len(meta.get('param_schema', []))}")
+            # ✅ 1. Загрузить ВСЮ телеметрию через load_telemetry()
+            telemetry_by_sim = self.data_loader.load_telemetry()
 
-            # ✅ Получаем команды
+            total_params = sum(len(params) for params in telemetry_by_sim.values())
+            self.logger.info(f"📊 Загружено {total_params} параметров для {len(telemetry_by_sim)} устройств")
+
+            # ✅ 2. Получить команды из реестра
             commands = self.opc_command_registry.commands
 
-            for obj_data in devices:
-                obj_name = obj_data.get('name', 'Unknown')
-                obj_sim = obj_data.get('sim')
+            # ✅ ОТЛАДКА: Проверить команды
+            for code, meta in commands.items():
+                if code == 'SET_CONFIG':
+                    self.logger.info(f"🔍 SET_CONFIG param_schema: {meta.get('param_schema')}")
 
-                if not obj_sim:
+            # ✅ 3. Фоллбэк если нет данных в БД
+            if not telemetry_by_sim:
+                self.logger.warning("⚠️ Нет данных в opc_params, используем get_devices() как фоллбэк")
+                devices = self.data_loader.get_devices()
+                for obj_data in devices:
+                    obj_name = obj_data.get('name', 'Unknown')
+                    obj_sim = obj_data.get('sim')
+                    if obj_sim:
+                        self._create_device_object(objects_node, obj_name, obj_data, commands)
+                return
+
+            # ✅ 4. Создать устройства из телеметрии БД
+            for sim, params in telemetry_by_sim.items():
+                if not params:
                     continue
 
-                # ✅ ОТЛАДКА: ПРОВЕРИТЬ ПЕРЕД СОЗДАНИЕМ
-                self.logger.info(f"🔍 Перед созданием {obj_name}:")
-                for code, meta in commands.items():
-                    if code == 'SET_CONFIG':
-                        self.logger.info(f"   SET_CONFIG param_schema: {meta.get('param_schema')}")
+                # ✅ Данные устройства из первого параметра
+                first_param = params[0]
+                obj_name = first_param.obj_name
+                obj_data = {
+                    'name': obj_name,
+                    'sim': sim,
+                    'sname': first_param.lpu,
+                }
 
-                self._create_device_object(
-                    objects_node,
-                    obj_name,
-                    obj_data,
-                    commands  # ← ← ← Передаём commands
+                # ✅ Создать устройство с параметрами ИЗ БД (не заглушка!)
+                self._create_device_object_from_telemetry(
+                    parent_node=objects_node,
+                    obj_name=obj_name,
+                    obj_sim=sim,
+                    params=params,  # ← ← ← Список TelemetryData из БД!
+                    commands=commands
                 )
 
-            self.logger.info("✅ Адресное пространство создано")
+            self.logger.info("✅ Адресное пространство создано из БД")
 
         except Exception as e:
-            self.logger.error(f"Ошибка создания адресного пространства: {e}", exc_info=True)
+            self.logger.error(f"❌ Ошибка создания адресного пространства: {e}", exc_info=True)
+            raise
+
+    # opc/server.py (рядом с _create_device_object)
+
+    def _create_device_object_from_telemetry(
+            self,
+            parent_node,
+            obj_name: str,
+            obj_sim: str,
+            params: List[TelemetryData],
+            commands: dict
+            ) -> None:
+        """
+        Создаёт объект устройства используя данные из БД
+
+        Args:
+            params: Список TelemetryData уже с value/timestamp из pvalues!
+        """
+        try:
+            from opcua.ua import AttributeIds, LocalizedText, DataValue
+
+            self.logger.info(f"📦 Создание устройства: {obj_name} (sim={obj_sim})")
+            self.logger.info(f"   Параметры из БД: {len(params)}")
+
+            # ✅ Создать объект устройства
+            device_node = parent_node.add_object(
+                self.idx,
+                self._to_browse_name(obj_name)
+            )
+            device_node.set_attribute(
+                AttributeIds.DisplayName,
+                DataValue(LocalizedText(obj_name))
+            )
+
+            # ✅ Папка Parameters
+            params_folder = device_node.add_object(self.idx, "Parameters")
+            params_folder.set_attribute(
+                AttributeIds.DisplayName,
+                DataValue(LocalizedText("Параметры"))
+            )
+
+            # ✅ ✅ Создаём параметры из БД (уже с value/timestamp!)
+            for param in params:
+                self.logger.debug(
+                    f"   📋 {param.alias}: type={param.param_type}, period={param.period}, pgroup={param.pgroup}")
+
+                # ✅ Передаём напрямую (уже из БД с value!)
+                self._create_parameter_node(params_folder, param)
+
+            # ✅ Папка Commands
+            commands_folder = device_node.add_object(self.idx, "Commands")
+            commands_folder.set_attribute(
+                AttributeIds.DisplayName,
+                DataValue(LocalizedText("Команды"))
+            )
+
+            # ✅ Создать методы команд
+            for code, meta in commands.items():
+                self._create_command_node(commands_folder, code, meta, sim=obj_sim)
+
+            # ✅ Кэш устройства
+            self._device_nodes[obj_sim] = {
+                'node': device_node,
+                'name': obj_name,
+                'sim': obj_sim
+            }
+
+            self.logger.info(f"✅ Устройство создано: {obj_name} (sim={obj_sim})")
+
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка создания устройства {obj_name}: {e}", exc_info=True)
+            raise
 
     def _create_device_object(
             self,
@@ -276,7 +412,7 @@ class OPCServer:
             # Создаём параметры устройства
             for p in params:
                 # Создаём временный объект для совместимости с _create_parameter_node
-                from db.data_loader import TelemetryData
+                from db.data_loader import TelemetryData, DataLoader
 
                 # Формируем кортеж как ожидает TelemetryData.__init__
                 # (obj_name, sim, lpu, period, alias, name, unit, comment,
