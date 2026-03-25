@@ -21,14 +21,13 @@ from opcua.ua import (
     SecurityPolicyType,
 )
 
-
 from db.connection import Database
 from db.data_loader import DataLoader, TelemetryData
 from opc.nodes import NodeCreator
 from opc.types import OPCTypeMapper
 from opc.commands.registry import OpcCommandRegistry
 from opc.status_codes import status_determiner
-from opc.utils.helpers import make_data_value
+from opc.utils.helpers import make_data_value, safe_variant, make_attr_value
 
 import queue
 import threading
@@ -473,7 +472,7 @@ class OPCServer:
             )
 
             # ✅ Папка Parameters
-            params_folder =  device_node.add_object(
+            params_folder = device_node.add_object(
                 ua.NodeId(0, self.idx),
                 ua.QualifiedName("Parameters", self.idx)
             )
@@ -488,7 +487,7 @@ class OPCServer:
                 self._create_parameter_node(params_folder, param)  # ← ← ← !
 
             # ✅ Папка Commands
-            commands_folder =  device_node.add_object(
+            commands_folder = device_node.add_object(
                 ua.NodeId(0, self.idx),
                 ua.QualifiedName("Commands", self.idx)
             )
@@ -1124,35 +1123,161 @@ class OPCServer:
 
         return id1 == id2 and ns1 == ns2
 
+    # def _create_parameter_node(self, parent_node, param: TelemetryData) -> None:
+    #     """
+    #     Создаёт узел параметра со StatusCode и Property со статусом
+    #
+    #     Args:
+    #         parent_node: Родительский узел (папка Parameters)
+    #         param: Данные параметра из БД
+    #     """
+    #     self.logger.debug(f"_create_parameter_node {param}")
+    #     try:
+    #         # 1. Определение типа данных и конвертация значения
+    #         variant_type = OPCTypeMapper.get_variant_type(param.param_type)
+    #         value = OPCTypeMapper.convert_value(param.value, variant_type)
+    #
+    #         # 2. Создание основного узла
+    #         node = parent_node.add_variable(
+    #             self.idx,
+    #             param.alias,
+    #             value,
+    #             varianttype=variant_type
+    #         )
+    #
+    #         # 3. DisplayName
+    #         node.set_attribute(
+    #             AttributeIds.DisplayName,
+    #             DataValue(LocalizedText(param.name or param.alias))
+    #         )
+    #
+    #         # 4. Description (статичное описание)
+    #         display_unit = param.unit or param.disp or ''
+    #         description = f"{param.comment}".strip()
+    #         if display_unit:
+    #             description += f" [{display_unit}]" if description else f"[{display_unit}]"
+    #
+    #         node.set_attribute(
+    #             AttributeIds.Description,
+    #             DataValue(LocalizedText(description))
+    #         )
+    #
+    #         # 5. EngineeringUnits (если есть единица измерения)
+    #         if display_unit:
+    #             try:
+    #                 eu_info = self.node_creator._create_engineering_unit(display_unit)
+    #                 node.set_attribute(
+    #                     AttributeIds.EngineeringUnits,
+    #                     DataValue(eu_info)
+    #                 )
+    #             except Exception as e:
+    #                 self.logger.debug(f"Не удалось установить EngineeringUnits для {param.alias}: {e}")
+    #
+    #         # 6. Определение статуса через nico
+    #         status_code, status_message = status_determiner.get_status(
+    #             alias=param.alias,
+    #             value=param.value,
+    #             timestamp=param.timestamp,
+    #             period_min=param.period,
+    #             nico=param.nico,
+    #             param_type=param.param_type
+    #         )
+    #
+    #         # 7. ✅ ВРЕМЕННЫЕ МЕТКИ (одинаковые для Value и Property!)
+    #         now = datetime.now(timezone.utc)
+    #         source_ts = param.timestamp or now  # ← Из БД (время получения)
+    #         server_ts = now  # ← Время обработки сервером
+    #
+    #         # 8. Установка значения основного узла
+    #         node.set_value(DataValue(
+    #             variant=Variant(value, variant_type),  # ← Ваша версия библиотеки
+    #             status=StatusCode(status_code.value if hasattr(status_code, 'value') else status_code),
+    #             sourceTimestamp=source_ts,  # ← Из БД
+    #             serverTimestamp=server_ts  # ← Текущее
+    #         ))
+    #
+    #         # 9. ✅ СОЗДАНИЕ PROPERTY (StatusMessage)
+    #         status_prop = node.add_property(
+    #             self.idx,
+    #             "StatusMessage",
+    #             status_message
+    #         )
+    #         status_prop.set_attribute(
+    #             AttributeIds.DisplayName,
+    #             DataValue(LocalizedText("Сообщение статуса"))
+    #         )
+    #         status_prop.set_attribute(
+    #             AttributeIds.Description,
+    #             DataValue(LocalizedText("Текстовое описание текущего статуса параметра"))
+    #         )
+    #         status_prop.set_writable(False)  # Только чтение
+    #
+    #         # 10. ✅ Установка значения Property (с ТАКИМИ ЖЕ timestamps!)
+    #         status_prop.set_value(DataValue(
+    #             variant=Variant(status_message, VariantType.String),  # ← Ваша версия
+    #             status=StatusCode(0x00000000),  # Good
+    #             sourceTimestamp=source_ts,  # ← ТО ЖЕ ЧТО У VALUE!
+    #             serverTimestamp=server_ts  # ← ТО ЖЕ ЧТО У VALUE!
+    #         ))
+    #
+    #         # 11. Сохранение в кэш для обновления
+    #         self._telemetry_nodes[param.alias] = {
+    #             'node': node,
+    #             'status_prop_node': status_prop,  # ← Ссылка на Property
+    #             'sim': param.sim,
+    #             'nico': param.nico,
+    #             'period': param.period,
+    #             'last_status': status_code,
+    #             'last_status_message': status_message
+    #         }
+    #
+    #         # 12. Подписка на NOTIFY из БД
+    #         self.db.listen(param.alias)
+    #
+    #         # 13. Логирование
+    #         self.logger.debug(
+    #             f"Создан параметр: {param.alias}, "
+    #             f"sim={param.sim}, "
+    #             f"nico={param.nico}, "
+    #             f"Status: {status_code}, "
+    #             f"Message: {status_message}, "
+    #             f"SourceTS: {source_ts}"
+    #             f"ServerTS: {server_ts}"
+    #         )
+    #
+    #     except Exception as e:
+    #         self.logger.error(f"Ошибка создания узла {param.alias}: {e}", exc_info=True)
+
     def _create_parameter_node(self, parent_node, param: TelemetryData) -> None:
-        """
-        Создаёт узел параметра со StatusCode и Property со статусом
+        """Создаёт узел параметра со StatusCode и Property со статусом"""
 
-        Args:
-            parent_node: Родительский узел (папка Parameters)
-            param: Данные параметра из БД
-        """
         self.logger.debug(f"_create_parameter_node {param}")
-        try:
-            # 1. Определение типа данных и конвертация значения
-            variant_type = OPCTypeMapper.get_variant_type(param.param_type)
-            value = OPCTypeMapper.convert_value(param.value, variant_type)
 
-            # 2. Создание основного узла
+        try:
+            # ✅ 1. Определение типа данных
+            variant_type = OPCTypeMapper.get_variant_type(param.param_type)
+
+            # ✅ 2. Конвертация начального значения (через safe_variant)
+            initial_value = param.value
+            self.logger.debug(
+                f"   {param.alias}: value={initial_value} ({type(initial_value).__name__}), type={variant_type.name}")
+
+            # ✅ 3. Создание основного узла (с безопасным начальным значением)
+            safe_initial = safe_variant(initial_value, variant_type)
             node = parent_node.add_variable(
                 self.idx,
                 param.alias,
-                value,
+                safe_initial.Value,  # ← ← ← Конвертированное значение!
                 varianttype=variant_type
             )
 
-            # 3. DisplayName
+            # ✅ 4. DisplayName (через хелпер)
             node.set_attribute(
                 AttributeIds.DisplayName,
-                DataValue(LocalizedText(param.name or param.alias))
+                make_attr_value(LocalizedText(param.name or param.alias), VariantType.LocalizedText)
             )
 
-            # 4. Description (статичное описание)
+            # ✅ 5. Description
             display_unit = param.unit or param.disp or ''
             description = f"{param.comment}".strip()
             if display_unit:
@@ -1160,21 +1285,24 @@ class OPCServer:
 
             node.set_attribute(
                 AttributeIds.Description,
-                DataValue(LocalizedText(description))
+                make_attr_value(LocalizedText(description), VariantType.LocalizedText)
             )
 
-            # 5. EngineeringUnits (если есть единица измерения)
+            # ✅ 6. EngineeringUnits (если есть)
             if display_unit:
                 try:
                     eu_info = self.node_creator._create_engineering_unit(display_unit)
                     node.set_attribute(
                         AttributeIds.EngineeringUnits,
-                        DataValue(eu_info)
+                        DataValue(
+                            variant=Variant(eu_info, VariantType.ExtensionObject),
+                            status=StatusCode(0x00000000)
+                        )
                     )
                 except Exception as e:
-                    self.logger.debug(f"Не удалось установить EngineeringUnits для {param.alias}: {e}")
+                    self.logger.debug(f"⚠️ EngineeringUnits для {param.alias}: {e}")
 
-            # 6. Определение статуса через nico
+            # ✅ 7. Определение статуса
             status_code, status_message = status_determiner.get_status(
                 alias=param.alias,
                 value=param.value,
@@ -1184,47 +1312,60 @@ class OPCServer:
                 param_type=param.param_type
             )
 
-            # 7. ✅ ВРЕМЕННЫЕ МЕТКИ (одинаковые для Value и Property!)
+            # ✅ 8. Временные метки
             now = datetime.now(timezone.utc)
-            source_ts = param.timestamp or now  # ← Из БД (время получения)
-            server_ts = now  # ← Время обработки сервером
+            source_ts = param.timestamp or now
+            server_ts = now
 
-            # 8. Установка значения основного узла
+            # ✅ ✅ 9. Установка значения (через safe_variant!)
+            variant = safe_variant(initial_value, variant_type)
+
+            # ✅ Логирование если была конвертация
+            if type(initial_value) != type(variant.Value):
+                self.logger.info(
+                    f"🔄 {param.alias}: конвертация при создании "
+                    f"{type(initial_value).__name__} → {type(variant.Value).__name__}"
+                )
+
             node.set_value(DataValue(
-                variant=Variant(value, variant_type),  # ← Ваша версия библиотеки
+                variant=variant,  # ← ← ← Безопасный Variant!
                 status=StatusCode(status_code.value if hasattr(status_code, 'value') else status_code),
-                sourceTimestamp=source_ts,  # ← Из БД
-                serverTimestamp=server_ts  # ← Текущее
+                sourceTimestamp=source_ts,
+                serverTimestamp=server_ts
             ))
 
-            # 9. ✅ СОЗДАНИЕ PROPERTY (StatusMessage)
+            # ✅ 10. Создание Property (StatusMessage)
             status_prop = node.add_property(
                 self.idx,
                 "StatusMessage",
-                status_message
+                ""  # ← ← ← Пустая строка для инициализации
             )
             status_prop.set_attribute(
                 AttributeIds.DisplayName,
-                DataValue(LocalizedText("Сообщение статуса"))
+                make_attr_value(LocalizedText("Сообщение статуса"), VariantType.LocalizedText)
             )
             status_prop.set_attribute(
                 AttributeIds.Description,
-                DataValue(LocalizedText("Текстовое описание текущего статуса параметра"))
+                make_attr_value(LocalizedText("Текстовое описание текущего статуса параметра"),
+                                VariantType.LocalizedText)
             )
-            status_prop.set_writable(False)  # Только чтение
+            status_prop.set_writable(False)
 
-            # 10. ✅ Установка значения Property (с ТАКИМИ ЖЕ timestamps!)
+            # ✅ ✅ 11. Установка значения Property (через safe_variant!)
+            # status_message может быть не строкой!
+            status_variant = safe_variant(status_message, VariantType.String)
+
             status_prop.set_value(DataValue(
-                variant=Variant(status_message, VariantType.String),  # ← Ваша версия
-                status=StatusCode(0x00000000),  # Good
-                sourceTimestamp=source_ts,  # ← ТО ЖЕ ЧТО У VALUE!
-                serverTimestamp=server_ts  # ← ТО ЖЕ ЧТО У VALUE!
+                variant=status_variant,  # ← ← ← Безопасный Variant!
+                status=StatusCode(0x00000000),
+                sourceTimestamp=source_ts,
+                serverTimestamp=server_ts
             ))
 
-            # 11. Сохранение в кэш для обновления
+            # ✅ 12. Сохранение в кэш
             self._telemetry_nodes[param.alias] = {
                 'node': node,
-                'status_prop_node': status_prop,  # ← Ссылка на Property
+                'status_prop_node': status_prop,
                 'sim': param.sim,
                 'nico': param.nico,
                 'period': param.period,
@@ -1232,22 +1373,21 @@ class OPCServer:
                 'last_status_message': status_message
             }
 
-            # 12. Подписка на NOTIFY из БД
+            # ✅ 13. Подписка на NOTIFY
             self.db.listen(param.alias)
 
-            # 13. Логирование
-            self.logger.debug(
-                f"Создан параметр: {param.alias}, "
+            # ✅ 14. Логирование
+            self.logger.info(
+                f"✅ Создан параметр: {param.alias}, "
                 f"sim={param.sim}, "
                 f"nico={param.nico}, "
                 f"Status: {status_code}, "
-                f"Message: {status_message}, "
-                f"SourceTS: {source_ts}"
-                f"ServerTS: {server_ts}"
+                f"Value: {variant.Value} ({type(variant.Value).__name__})"
             )
 
         except Exception as e:
-            self.logger.error(f"Ошибка создания узла {param.alias}: {e}", exc_info=True)
+            self.logger.error(f"❌ Ошибка создания узла {param.alias}: {e}", exc_info=True)
+            raise
 
     def _node_id_to_variant_type(self, node_id: ua.NodeId) -> ua.VariantType:
         """Конвертирует NodeId в VariantType"""
@@ -1325,35 +1465,46 @@ class OPCServer:
             node_id = node.get_data_type()
             variant_type = self._node_id_to_variant_type(node_id)
 
-            # ✅ Обработка None значения
-            if value is None:
-                # ✅ Простой вариант: прямой маппинг
-                if variant_type == VariantType.String:
-                    safe_value = ""
-                elif variant_type in (VariantType.Int32, VariantType.Int64):
-                    safe_value = 0
-                elif variant_type in (VariantType.Double, VariantType.Float):
-                    safe_value = 0.0
-                elif variant_type == VariantType.Boolean:
-                    safe_value = False
-                elif variant_type == VariantType.DateTime:
-                    safe_value = datetime.now(timezone.utc)
-                elif variant_type == VariantType.Byte:
-                    safe_value = 0
-                else:
-                    safe_value = ""  # Fallback
+            # ✅ ✅ ВАЖНО: Использовать safe_variant для конвертации
+            variant = safe_variant(value, variant_type)
 
-                self.logger.debug(f"   Variant: value={safe_value}, type={variant_type}")
-                variant = Variant(safe_value, variant_type)
-            else:
-                # ✅ Конвертация строки в datetime
-                if variant_type == VariantType.DateTime and isinstance(value, str):
-                    try:
-                        value = datetime.fromisoformat(value.replace('Z', '+00:00'))
-                    except Exception:
-                        value = datetime.now(timezone.utc)
-
-                variant = Variant(value, variant_type)
+            # ✅ Логирование если была конвертация
+            if type(value) != type(variant.Value):
+                self.logger.debug(
+                    f"🔄 {alias}: конвертация {type(value).__name__} → "
+                    f"{type(variant.Value).__name__} ({variant_type.name})"
+                )
+            # # ✅ Обработка None значения
+            # if value is None:
+            #     # ✅ Простой вариант: прямой маппинг
+            #     if variant_type == VariantType.String:
+            #         safe_value = ""
+            #     elif variant_type in (VariantType.Int32, VariantType.Int64):
+            #         safe_value = 0
+            #     elif variant_type in (VariantType.Double, VariantType.Float):
+            #         safe_value = 0.0
+            #     elif variant_type == VariantType.Boolean:
+            #         safe_value = False
+            #     elif variant_type == VariantType.DateTime:
+            #         safe_value = datetime.now(timezone.utc)
+            #     elif variant_type == VariantType.Byte:
+            #         safe_value = 0
+            #     else:
+            #         safe_value = ""  # Fallback
+            #
+            #     self.logger.debug(f"   Variant: value={safe_value}, type={variant_type}")
+            #     # variant = Variant(safe_value, variant_type)
+            #     variant = safe_variant(safe_value, variant_type)
+            # else:
+            #     # ✅ Конвертация строки в datetime
+            #     if variant_type == VariantType.DateTime and isinstance(value, str):
+            #         try:
+            #             value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            #         except Exception:
+            #             value = datetime.now(timezone.utc)
+            #
+            #     # variant = Variant(value, variant_type)
+            #     variant = safe_variant(value, variant_type)
 
             # ✅ Временные метки
             source_ts = timestamp
