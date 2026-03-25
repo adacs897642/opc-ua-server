@@ -114,14 +114,47 @@ class OPCApp:
         self._setup_signals()
 
     def _setup_signals(self) -> None:
-        """Регистрирует обработчики сигналов"""
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        """Регистрирует обработчики сигналов (кросс-платформенно)"""
+
+        # ✅ Всегда доступные сигналы
+        signal.signal(signal.SIGINT, self._signal_handler)  # Ctrl+C
+        signal.signal(signal.SIGTERM, self._signal_handler)  # kill / systemd
+
+        # ✅ Windows-специфичный сигнал
+        if hasattr(signal, 'SIGBREAK'):
+            signal.signal(signal.SIGBREAK, self._signal_handler)  # Ctrl+Break
+
+        # ✅ Unix-специфичные сигналы (проверка перед использованием)
+        if hasattr(signal, 'SIGHUP'):
+            signal.signal(signal.SIGHUP, self._signal_handler)  # Закрытие терминала
+
+        if hasattr(signal, 'SIGUSR1'):
+            signal.signal(signal.SIGUSR1, self._signal_handler)  # Пользовательский 1
+
+        if hasattr(signal, 'SIGUSR2'):
+            signal.signal(signal.SIGUSR2, self._signal_handler)  # Пользовательский 2
+
+        self.logger.info("✅ Обработчики сигналов зарегистрированы")
 
     def _signal_handler(self, signum, frame) -> None:
         """Обработчик сигналов завершения"""
-        self.logger.info(f"Получен сигнал {signum}, завершение...")
+        sig_name = {
+            signal.SIGINT: 'SIGINT (Ctrl+C)',
+            signal.SIGTERM: 'SIGTERM (kill)',
+            signal.SIGHUP: 'SIGHUP (reload)'
+        }.get(signum, f'signal {signum}')
+
+        self.logger.info(f"🛑 Получен сигнал {sig_name}, завершение...")
         self._running = False
+
+        # ✅ Дополнительно: прервать блокирующий select() если нужно
+        # (опционально, если select() блокирует завершение)
+        if hasattr(self.db, 'conn') and self.db.conn:
+            try:
+                # Отправить "пустой" запрос чтобы прервать select
+                self.db.conn.cancel()
+            except:
+                pass  # Игнорировать если не поддерживается
 
     def run(self) -> None:
         """Запускает приложение"""
@@ -130,10 +163,14 @@ class OPCApp:
             self._running = True
             self.logger.info("✅ Инициализация завершена, запуск цикла...")
             self._main_loop()
+        except KeyboardInterrupt:
+            self.logger.info("🛑 Прервано пользователем (Ctrl+C)")
         except Exception as e:
-            self.logger.exception(f"Ошибка в главном цикле: {e}")
+            self.logger.exception(f"❌ Критическая ошибка: {e}")
         finally:
+            # ✅ ✅ ✅ Всегда вызывать shutdown (даже при ошибке!)
             self._shutdown()
+            self.logger.info("✅ Приложение завершено")
 
     # core/app.py
 
@@ -174,25 +211,68 @@ class OPCApp:
 
         self.logger.info("Инициализация завершена")
 
+    # def _shutdown(self) -> None:
+    #     """Корректное завершение"""
+    #     self.logger.info("Завершение работы...")
+    #
+    #     # ✅ Порядок остановки: сначала бизнес-логика, потом OPC
+    #     if self.command_executor:
+    #         self.command_executor.stop()
+    #
+    #     if self.command_reload:
+    #         self.command_reload.stop()
+    #
+    #     if self.opc_server:
+    #         self.opc_server.stop()
+    #
+    #     if self.db:
+    #         self.db.close()
+    #
+    #     self.logger.info("Работа завершена")
+    # core/app.py
+
     def _shutdown(self) -> None:
-        """Корректное завершение"""
-        self.logger.info("Завершение работы...")
+        """Корректное завершение (идемпотентное)"""
+        self.logger.info("🧹 Завершение работы, очистка ресурсов...")
 
-        # ✅ Порядок остановки: сначала бизнес-логика, потом OPC
-        if self.command_executor:
-            self.command_executor.stop()
+        # ✅ Флаг чтобы не вызвать _shutdown() дважды
+        if getattr(self, '_shutting_down', False):
+            self.logger.debug("⚠️ _shutdown() уже вызывается, пропускаем")
+            return
+        self._shutting_down = True
 
-        if self.command_reload:
-            self.command_reload.stop()
+        # ✅ Порядок: бизнес-логика → OPC → БД
+        components = [
+            ('Command Executor', self.command_executor),
+            ('Command Reload', self.command_reload),
+            ('OPC Server', self.opc_server),
+            ('Database', self.db),
+        ]
 
-        if self.opc_server:
-            self.opc_server.stop()
+        for name, component in components:
+            if component:
+                try:
+                    self.logger.info(f"🔌 Остановка {name}...")
 
-        if self.db:
-            self.db.close()
+                    if hasattr(component, 'stop'):
+                        component.stop()
+                    elif hasattr(component, 'close'):
+                        component.close()
+                    elif hasattr(component, 'disconnect'):
+                        component.disconnect()
 
-        self.logger.info("Работа завершена")
+                    self.logger.info(f"✅ {name} остановлен")
 
+                except Exception as e:
+                    self.logger.error(f"❌ Ошибка остановки {name}: {e}", exc_info=True)
+
+        # ✅ Очистить ссылки
+        self.command_executor = None
+        self.command_reload = None
+        self.opc_server = None
+        self.db = None
+
+        self.logger.info("🏁 Все ресурсы освобождены, завершение")
     # def _initialize(self) -> None:
     #     """Инициализирует компоненты"""
     #     self.logger.info("Инициализация компонентов...")
@@ -258,29 +338,77 @@ class OPCApp:
         self.command_executor.start()
         # pass
 
+    # core/app.py
+
     def _main_loop(self) -> None:
         """Главный цикл обработки событий"""
         import select
         import time
 
-        poll_timeout = self.config.get('polling.notify_timeout_sec', 5)
+        # ✅ Уменьшить таймаут для быстрого реагирования на сигнал
+        poll_timeout = min(
+            self.config.get('polling.notify_timeout_sec', 5),
+            1.0  # ← ← ← Не больше 1 секунды!
+        )
         update_interval = self.config.get('polling.update_interval_sec', 5)
+
+        last_update = 0
 
         while self._running:
             try:
-                # ✅ Проверить состояние сервера
+                # ✅ Проверить уведомления (с коротким таймаутом)
                 if select.select([self.db.conn], [], [], poll_timeout)[0]:
-                    self.db.poll_notifications()
-                    for channel in self.db.conn.notifies:
-                        self.db.conn.notifies.remove(channel)
-                        self._handle_notification(channel)
+                    # ✅ Обработать ВСЕ уведомления, но с проверкой флага
+                    while self._running and self.db.conn.notifies:
+                        notify = self.db.conn.notifies.pop(0)
+                        self._handle_notification(notify)
                 else:
-                    self.opc_server.update_telemetry()
-                    time.sleep(0.1)
+                    # ✅ Периодическое обновление телеметрии
+                    now = time.time()
+                    if now - last_update >= update_interval:
+                        self.opc_server.update_telemetry()
+                        last_update = now
+
+                    # ✅ Короткий сон чтобы не грузить CPU
+                    time.sleep(0.05)  # 50 мс
+
+            except KeyboardInterrupt:
+                # ← ← ← На случай если сигнал не перехвачен
+                self.logger.info("🛑 Получен KeyboardInterrupt")
+                break
+            except select.error as e:
+                # ← ← ← select() прерван сигналом
+                if e.args[0] == 4:  # EINTR
+                    self.logger.debug("⚠️ select() прерван сигналом, продолжаем")
+                    continue
+                raise
             except Exception as e:
-                self.logger.error(f"Ошибка в главном цикле: {e}")
-                # ✅ Пауза
+                self.logger.error(f"❌ Ошибка в главном цикле: {e}", exc_info=True)
+                # ✅ Не выходить при ошибке, продолжить работу
                 time.sleep(1)
+    # def _main_loop(self) -> None:
+    #     """Главный цикл обработки событий"""
+    #     import select
+    #     import time
+    #
+    #     poll_timeout = self.config.get('polling.notify_timeout_sec', 5)
+    #     update_interval = self.config.get('polling.update_interval_sec', 5)
+    #
+    #     while self._running:
+    #         try:
+    #             # ✅ Проверить состояние сервера
+    #             if select.select([self.db.conn], [], [], poll_timeout)[0]:
+    #                 self.db.poll_notifications()
+    #                 for channel in self.db.conn.notifies:
+    #                     self.db.conn.notifies.remove(channel)
+    #                     self._handle_notification(channel)
+    #             else:
+    #                 self.opc_server.update_telemetry()
+    #                 time.sleep(0.1)
+    #         except Exception as e:
+    #             self.logger.error(f"Ошибка в главном цикле: {e}")
+    #             # ✅ Пауза
+    #             time.sleep(1)
 
     def _handle_notification(self, notify) -> None:
         """
