@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from opcua import ua
 from opcua.ua import (
     LocalizedText, DataValue, Variant, VariantType,
-    StatusCode, StatusCodes, NodeId, QualifiedName, AttributeIds
+    StatusCode, StatusCodes, NodeId, AttributeIds
 )
 
 from opc.types import OPCTypeMapper

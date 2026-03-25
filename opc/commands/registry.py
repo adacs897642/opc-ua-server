@@ -8,7 +8,7 @@ import logging
 import json
 from typing import Dict, Any, Optional, Tuple
 from opcua import ua
-from opcua.ua import Variant, VariantType, NodeId, ObjectIds
+from opcua.ua import Variant, VariantType
 from db.connection import Database
 from opc.commands.executor import OpcCommandReceiver
 

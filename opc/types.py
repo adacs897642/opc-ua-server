@@ -6,7 +6,7 @@
 
 import logging
 from typing import Any, Optional
-from opcua import ua
+# from opcua import ua
 from opcua.ua import VariantType, NodeId
 
 logger = logging.getLogger(__name__)

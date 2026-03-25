@@ -121,8 +121,14 @@ def main():
         logger.info(f"Запуск OPC UA Server")
         logger.info(f"Конфигурация: {config_path}")
 
+        # ✅ Включить отладочное логирование библиотеки opcua
+        # logging.getLogger('opcua').setLevel(logging.DEBUG)
+        # logging.getLogger('opcua.server').setLevel(logging.DEBUG)
+        # logging.getLogger('opcua.server.binary_server_asyncio').setLevel(logging.DEBUG)
+
         # Инициализация и запуск приложения
         app = OPCApp(config_path)
+        # ✅ Запустить асинхронный метод через asyncio.run()
         app.run()
 
         return 0

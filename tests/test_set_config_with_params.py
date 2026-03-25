@@ -1,7 +1,7 @@
 # tests/test_set_config_with_params.py
 
-from opcua import Client
-from opcua.ua import CallMethodRequest, Variant, VariantType, NodeClass
+from asyncua import Client
+from asyncua.ua import CallMethodRequest, Variant, VariantType, NodeClass
 
 
 def main():

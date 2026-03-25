@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Optional, Any, Tuple
 from enum import IntEnum
 
-from opcua import ua
+# from opcua import ua
 from opcua.ua import StatusCode
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class StatusDeterminer:
             param_type: str = 'float'
     ) -> Tuple[StatusCode, str]:
         """Определяет StatusCode для параметра"""
-        now = datetime.now(timezone.utc)
+        self.logger.debug(f"get_status {alias} {value} {timestamp} {period_min} {nico} {param_type}")
 
         # 1. Проверка критических ошибок NICО (приоритет 1)
         if nico is not None and nico in self.BAD_NICO_CODES:
@@ -136,20 +136,20 @@ class StatusDeterminer:
         if age_seconds > period_seconds * self.TIMEOUT_WARNING_MULTIPLIER:
             minutes_ago = age_seconds / 60
             return self._create_status(
-                StatusCodeHex.UNCERTAIN_LAST_USABLE_VALUE,  #← ← ← HEX!
+                StatusCodeHex.UNCERTAIN_LAST_USABLE_VALUE,  # ← ← ← HEX!
                 f"Данные устарели ({minutes_ago:.1f} мин назад)"
             )
 
             # ❌ Критическая просрочка (2.0 * period)
-            if age_seconds > period_seconds * self.TIMEOUT_BAD_MULTIPLIER:
-                minutes_ago = age_seconds / 60
-                return self._create_status(
-                    StatusCodeHex.BAD_TIMEOUT, # ← ← ← HEX!
+        if age_seconds > period_seconds * self.TIMEOUT_BAD_MULTIPLIER:
+            minutes_ago = age_seconds / 60
+            return self._create_status(
+                StatusCodeHex.BAD_TIMEOUT,  # ← ← ← HEX!
                 f"Таймаут данных ({minutes_ago:.1f} мин назад)"
-                )
+            )
 
-                # ✅ Всё хорошо
-                return self._create_status(StatusCodeHex.GOOD, "OK")
+            # ✅ Всё хорошо
+        return self._create_status(StatusCodeHex.GOOD, "OK")
 
     def _check_battery_status(self, nico: Optional[int]) -> Tuple[StatusCode, str]:
         """Проверяет статус батареи по коду иконки (nico)"""

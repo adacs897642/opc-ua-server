@@ -4,8 +4,8 @@
 Тест валидации параметров из desc_params
 """
 
-from opcua import Client
-from opcua.ua import CallMethodRequest, Variant, VariantType, NodeClass
+from asyncua import Client
+from asyncua.ua import CallMethodRequest, Variant, VariantType, NodeClass
 
 
 def test_validation_with_desc_params():
