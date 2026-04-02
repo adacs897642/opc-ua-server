@@ -90,7 +90,7 @@ class DataLoader:
             default_period_min = int(config)
         else:
             self.config = {}
-        self.logger.info(f"📊 DataLoader инициализирован: {self.config}")
+        self.logger.info(f"📊 DataLoader инициализирован")
         # ✅ Определить default_period_min
         if default_period_min is not None:
             # Явно переданный период имеет приоритет

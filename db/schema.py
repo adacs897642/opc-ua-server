@@ -7,6 +7,7 @@
 
 import logging
 from typing import List, Dict, Optional, TYPE_CHECKING
+
 # ✅ Импортируем только для проверки типов (не во время выполнения)
 if TYPE_CHECKING:
     from db.connection import Database
@@ -30,6 +31,12 @@ class SchemaValidator:
         'device_config_history',
         'desc_params',
         'device_command_queue',
+        'opc_users',
+        'opc_roles',
+        'opc_user_roles',
+        'opc_permissions',
+        'opc_role_permissions',
+        'opc_auth_log'
     ]
 
     # ✅ CREATE TABLE statements (точно как у вас)
@@ -157,7 +164,6 @@ class SchemaValidator:
                     ON DELETE SET NULL ON UPDATE CASCADE
             )
         """,
-
         'device_config_history': """
             CREATE TABLE IF NOT EXISTS public.device_config_history (
                 id serial PRIMARY KEY,
@@ -179,7 +185,6 @@ class SchemaValidator:
                     CHECK (status = ANY (ARRAY['pending', 'done', 'error']))
             )
         """,
-
         'desc_params': """
             CREATE TABLE IF NOT EXISTS public.desc_params (
                 id_dev int4 NOT NULL,
@@ -218,54 +223,93 @@ class SchemaValidator:
                         ON DELETE CASCADE ON UPDATE CASCADE
                 )
             """,
+        'opc_users': """        
+                    CREATE TABLE IF NOT EXISTS opc_users (
+                        id SERIAL PRIMARY KEY,
+                        username VARCHAR(64) UNIQUE NOT NULL,
+                        password_hash VARCHAR(255) NOT NULL,  -- SHA256(salt+password+salt)
+                        enabled BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        last_login TIMESTAMP WITH TIME ZONE,
+                        failed_attempts INTEGER DEFAULT 0,
+                        locked_until TIMESTAMP WITH TIME ZONE,
+                        CONSTRAINT username_not_empty CHECK (char_length(username) >= 3)
+                    );""",
+        'opc_roles': """
+                    CREATE TABLE IF NOT EXISTS opc_roles (
+                        id SERIAL PRIMARY KEY,
+                        role_name VARCHAR(32) UNIQUE NOT NULL,
+                        description TEXT,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    );""",
+        'opc_user_roles': """
+                    CREATE TABLE IF NOT EXISTS opc_user_roles (
+                        user_id INTEGER REFERENCES opc_users(id) ON DELETE CASCADE,
+                        role_id INTEGER REFERENCES opc_roles(id) ON DELETE CASCADE,
+                        granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        granted_by VARCHAR(64),  -- кто выдал роль
+                        PRIMARY KEY (user_id, role_id)
+                    );""",
+        'opc_permissions': """
+                    CREATE TABLE IF NOT EXISTS opc_permissions (
+                        id SERIAL PRIMARY KEY,
+                        permission_name VARCHAR(64) UNIQUE NOT NULL,  -- 'read', 'write', 'execute', 'configure'
+                        description TEXT
+                    );""",
+        'opc_role_permissions':
+            """CREATE TABLE IF NOT EXISTS opc_role_permissions (
+                        role_id INTEGER REFERENCES opc_roles(id) ON DELETE CASCADE,
+                        permission_id INTEGER REFERENCES opc_permissions(id) ON DELETE CASCADE,
+                        PRIMARY KEY (role_id, permission_id)
+                    );""",
+        'opc_auth_log':
+            """CREATE TABLE IF NOT EXISTS opc_auth_log (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(64) NOT NULL,
+                    success BOOLEAN NOT NULL,
+                    client_address INET,
+                    user_agent TEXT,  -- OPC UA клиент (UaExpert, custom, etc.)
+                    error_message TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                ); """
     }
 
     # ✅ Индексы
     INDEX_DEFINITIONS = {
-        'i1_pvalues': """
-            CREATE INDEX IF NOT EXISTS i1_pvalues 
-            ON public.pvalues USING btree (alias)
-        """,
-        'i2_pvalues': """
-            CREATE INDEX IF NOT EXISTS i2_pvalues 
-            ON public.pvalues USING btree (id)
-        """,
-        'i3_pvalues': """
-            CREATE INDEX IF NOT EXISTS i3_pvalues 
-            ON public.pvalues USING btree (id, alias)
-        """,
-        'idx_commands_queue_status': """
-            CREATE INDEX IF NOT EXISTS idx_commands_queue_status 
-            ON commands_queue(status)
-        """,
-        'idx_commands_queue_sim': """
-            CREATE INDEX IF NOT EXISTS idx_commands_queue_sim 
-            ON commands_queue(sim)
-        """,
-        'idx_commands_queue_created': """
-            CREATE INDEX IF NOT EXISTS idx_commands_queue_created 
-            ON commands_queue(created_at DESC)
-        """,
-        'idx_device_config_sim': """
-            CREATE INDEX IF NOT EXISTS idx_device_config_sim 
-            ON device_config_history(sim)
-        """,
-        'idx_device_config_param': """
-            CREATE INDEX IF NOT EXISTS idx_device_config_param 
-            ON device_config_history(param_name)
-        """,
-        'idx_device_cmd_queue_sim': """
-                CREATE INDEX IF NOT EXISTS idx_device_cmd_queue_sim 
-                ON device_command_queue(sim)
-            """,
-        'idx_device_cmd_queue_status': """
-                CREATE INDEX IF NOT EXISTS idx_device_cmd_queue_status 
-                ON device_command_queue(status)
-            """,
-        'idx_device_cmd_queue_created': """
-                CREATE INDEX IF NOT EXISTS idx_device_cmd_queue_created 
-                ON device_command_queue(created_at DESC)
-            """,
+        'i1_pvalues':
+            """CREATE INDEX IF NOT EXISTS i1_pvalues ON public.pvalues USING btree (alias)""",
+        'i2_pvalues':
+            """CREATE INDEX IF NOT EXISTS i2_pvalues ON public.pvalues USING btree (id)""",
+        'i3_pvalues':
+            """CREATE INDEX IF NOT EXISTS i3_pvalues ON public.pvalues USING btree (id, alias)""",
+        'idx_commands_queue_status':
+            """CREATE INDEX IF NOT EXISTS idx_commands_queue_status ON commands_queue(status)""",
+        'idx_commands_queue_sim':
+            """CREATE INDEX IF NOT EXISTS idx_commands_queue_sim ON commands_queue(sim)""",
+        'idx_commands_queue_created':
+            """CREATE INDEX IF NOT EXISTS idx_commands_queue_created ON commands_queue(created_at DESC)""",
+        'idx_device_config_sim':
+            """CREATE INDEX IF NOT EXISTS idx_device_config_sim ON device_config_history(sim)""",
+        'idx_device_config_param':
+            """CREATE INDEX IF NOT EXISTS idx_device_config_param ON device_config_history(param_name)""",
+        'idx_device_cmd_queue_sim':
+            """CREATE INDEX IF NOT EXISTS idx_device_cmd_queue_sim ON device_command_queue(sim)""",
+        'idx_device_cmd_queue_status':
+            """CREATE INDEX IF NOT EXISTS idx_device_cmd_queue_status ON device_command_queue(status)""",
+        'idx_device_cmd_queue_created':
+            """CREATE INDEX IF NOT EXISTS idx_device_cmd_queue_created ON device_command_queue(created_at DESC)""",
+        'idx_opc_roles_name':
+            """CREATE INDEX IF NOT EXISTS idx_opc_roles_name ON opc_roles(role_name);""",
+        'idx_opc_permissions_name':
+            """CREATE INDEX IF NOT EXISTS idx_opc_permissions_name ON opc_permissions(permission_name);""",
+        'idx_opc_users_username':
+            """CREATE INDEX IF NOT EXISTS idx_opc_users_username ON opc_users(username);""",
+        'idx_opc_users_enabled':
+            """CREATE INDEX IF NOT EXISTS idx_opc_users_enabled ON opc_users(enabled) WHERE enabled = FALSE;""",
+        'idx_opc_auth_log_username':
+            """CREATE INDEX IF NOT EXISTS idx_opc_auth_log_username ON opc_auth_log(username);""",
+        'idx_opc_auth_log_time':
+            """CREATE INDEX IF NOT EXISTS idx_opc_auth_log_time ON opc_auth_log(created_at DESC);"""
     }
 
     # ✅ Триггеры и функции (проверка существования)
@@ -309,25 +353,52 @@ class SchemaValidator:
             $function$
             ;
         """,
+        'notify_opc_user_change': """-- ✅ Функция для отправки уведомления
+            CREATE OR REPLACE FUNCTION notify_opc_user_change()
+            RETURNS TRIGGER AS $$
+            DECLARE
+                payload JSON;
+                username TEXT;
+            BEGIN
+                -- ✅ Определить имя пользователя
+                IF TG_OP = 'DELETE' THEN
+                    username = OLD.username;
+                ELSE
+                    username = NEW.username;
+                END IF;
+                
+                -- ✅ Сформировать payload
+                payload = json_build_object(
+                    'action', LOWER(TG_OP),
+                    'username', username,
+                    'timestamp', NOW()
+                );
+                
+                -- ✅ Отправить уведомление
+                PERFORM pg_notify('opc_user_change', payload::text);
+                
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;""",
         # 'newvalue': """
-            # CREATE OR REPLACE FUNCTION public.newvalue()
-            # RETURNS trigger AS $$
-            # BEGIN
-            #     -- ✅ UPSERT вместо INSERT + EXCEPTION + UPDATE
-            #     INSERT INTO pvaluesm1(alias, time, value, valid)
-            #     VALUES (NEW.alias, NEW.time, NEW.value, NEW.valid)
-            #     ON CONFLICT (alias) DO UPDATE
-            #         SET time = EXCLUDED.time,
-            #             value = EXCLUDED.value,
-            #             valid = EXCLUDED.valid,
-            #             updated_at = now();
-            #
-            #     -- ✅ Удаляем из pvalues (перемещение в m1)
-            #     DELETE FROM pvalues WHERE alias = NEW.alias;
-            #
-            #     RETURN NULL;  -- Для BEFORE INSERT триггера
-            # END;
-            # $$ LANGUAGE plpgsql
+        # CREATE OR REPLACE FUNCTION public.newvalue()
+        # RETURNS trigger AS $$
+        # BEGIN
+        #     -- ✅ UPSERT вместо INSERT + EXCEPTION + UPDATE
+        #     INSERT INTO pvaluesm1(alias, time, value, valid)
+        #     VALUES (NEW.alias, NEW.time, NEW.value, NEW.valid)
+        #     ON CONFLICT (alias) DO UPDATE
+        #         SET time = EXCLUDED.time,
+        #             value = EXCLUDED.value,
+        #             valid = EXCLUDED.valid,
+        #             updated_at = now();
+        #
+        #     -- ✅ Удаляем из pvalues (перемещение в m1)
+        #     DELETE FROM pvalues WHERE alias = NEW.alias;
+        #
+        #     RETURN NULL;  -- Для BEFORE INSERT триггера
+        # END;
+        # $$ LANGUAGE plpgsql
         # """,
         'calcspd': """
             -- DROP FUNCTION public.calcspd();

@@ -67,13 +67,17 @@
               "type": ["string", "null"],
               "description": "Путь к сертификату"
             },
-            "private_key": {
+            "key_path": {
               "type": ["string", "null"],
               "description": "Путь к приватному ключу"
             }
           }
         }
       }
+    },
+    "users_file": {
+      "type":  ["string", "null"],
+      "description": "Путь к файлу пользователей"
     },
     "database": {
       "type": "object",

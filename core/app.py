@@ -137,12 +137,24 @@ class OPCApp:
         self.logger.info("✅ Обработчики сигналов зарегистрированы")
 
     def _signal_handler(self, signum, frame) -> None:
-        """Обработчик сигналов завершения"""
-        sig_name = {
+        """Обработчик сигналов завершения (кросс-платформенный)"""
+        # ✅ Определить имя сигнала (с обработкой неизвестных)
+        sig_names = {
             signal.SIGINT: 'SIGINT (Ctrl+C)',
             signal.SIGTERM: 'SIGTERM (kill)',
-            signal.SIGHUP: 'SIGHUP (reload)'
-        }.get(signum, f'signal {signum}')
+        }
+
+        # Добавить платформенно-специфичные
+        if hasattr(signal, 'SIGBREAK'):
+            sig_names[signal.SIGBREAK] = 'SIGBREAK (Ctrl+Break)'
+        if hasattr(signal, 'SIGHUP'):
+            sig_names[signal.SIGHUP] = 'SIGHUP (terminal closed)'
+        if hasattr(signal, 'SIGUSR1'):
+            sig_names[signal.SIGUSR1] = 'SIGUSR1 (custom 1)'
+        if hasattr(signal, 'SIGUSR2'):
+            sig_names[signal.SIGUSR2] = 'SIGUSR2 (custom 2)'
+
+        sig_name = sig_names.get(signum, f'signal {signum}')
 
         self.logger.info(f"🛑 Получен сигнал {sig_name}, завершение...")
         self._running = False
@@ -182,10 +194,24 @@ class OPCApp:
         self.db = Database(self.config.db_config)
 
         self.logger.info("✅ База данных готова к работе")
+        # ✅ ✅ ✅ Передать config в UserManager!
+        from opc.user_manager import UserManager
+        self.user_manager = UserManager(
+            config=self.config._config,
+            db_connection=self.db.conn  # ← ← ← Передать psycopg2 connection!
+        )
 
         # ✅ OPC UA сервер (внутри: OpcCommandRegistry + OpcCommandReceiver)
         self.opc_server = OPCServer(self.config._config, self.db)
+
         self.opc_server.start()
+        # ✅ ✅ ✅ ТОЛЬКО ПОСЛЕ start() сервер создан — назначить user_manager
+        if self.opc_server.server:
+            self.opc_server.server.user_manager = self.user_manager
+            self.logger.info("✅ user_manager назначен серверу")
+        else:
+            self.logger.error("❌ self.opc_server.server всё ещё None после start()!")
+            raise RuntimeError("Сервер не создан!")
 
         # ✅ Hot-reload (опционально)
         self.command_reload = CommandHotReload(
@@ -211,37 +237,16 @@ class OPCApp:
 
         self.logger.info("Инициализация завершена")
 
-    # def _shutdown(self) -> None:
-    #     """Корректное завершение"""
-    #     self.logger.info("Завершение работы...")
-    #
-    #     # ✅ Порядок остановки: сначала бизнес-логика, потом OPC
-    #     if self.command_executor:
-    #         self.command_executor.stop()
-    #
-    #     if self.command_reload:
-    #         self.command_reload.stop()
-    #
-    #     if self.opc_server:
-    #         self.opc_server.stop()
-    #
-    #     if self.db:
-    #         self.db.close()
-    #
-    #     self.logger.info("Работа завершена")
-    # core/app.py
-
     def _shutdown(self) -> None:
-        """Корректное завершение (идемпотентное)"""
-        self.logger.info("🧹 Завершение работы, очистка ресурсов...")
+        """Полное завершение с гарантированным выходом"""
+        import threading
+        import time
+        import sys
+        import os
 
-        # ✅ Флаг чтобы не вызвать _shutdown() дважды
-        if getattr(self, '_shutting_down', False):
-            self.logger.debug("⚠️ _shutdown() уже вызывается, пропускаем")
-            return
-        self._shutting_down = True
+        self.logger.info("🧹 Завершение работы...")
 
-        # ✅ Порядок: бизнес-логика → OPC → БД
+        # ✅ 1. Остановить компоненты по порядку
         components = [
             ('Command Executor', self.command_executor),
             ('Command Reload', self.command_reload),
@@ -253,80 +258,47 @@ class OPCApp:
             if component:
                 try:
                     self.logger.info(f"🔌 Остановка {name}...")
-
                     if hasattr(component, 'stop'):
                         component.stop()
                     elif hasattr(component, 'close'):
                         component.close()
-                    elif hasattr(component, 'disconnect'):
-                        component.disconnect()
-
                     self.logger.info(f"✅ {name} остановлен")
-
                 except Exception as e:
-                    self.logger.error(f"❌ Ошибка остановки {name}: {e}", exc_info=True)
+                    self.logger.error(f"❌ Ошибка остановки {name}: {e}")
 
-        # ✅ Очистить ссылки
+        # ✅ 2. Ожидание фоновых задач
+        self.logger.info("⏳ Ожидание завершения фоновых задач (2 сек)...")
+        time.sleep(2)
+
+        # ✅ 3. Диагностика потоков
+        active_threads = threading.enumerate()
+        non_daemon = [t for t in active_threads if t.name != 'MainThread' and not t.daemon]
+
+        if non_daemon:
+            self.logger.warning(f"⚠️ Активные не-daemon потоки ({len(non_daemon)}):")
+            for t in non_daemon:
+                self.logger.warning(f"   - {t.name} (daemon={t.daemon})")
+        else:
+            self.logger.info("✅ Все потоки завершены")
+
+        # ✅ 4. Очистить ссылки
         self.command_executor = None
         self.command_reload = None
         self.opc_server = None
         self.db = None
 
-        self.logger.info("🏁 Все ресурсы освобождены, завершение")
-    # def _initialize(self) -> None:
-    #     """Инициализирует компоненты"""
-    #     self.logger.info("Инициализация компонентов...")
-    #
-    #     # ✅ База данных (исправлено!)
-    #     self.db = Database(self.config.db_config)
-    #
-    #     # OPC UA сервер (внутри создаётся вся структура)
-    #     self.opc_server = OPCServer(self.config._config, self.db)
-    #     self.opc_server.start()  # ← Здесь вызывается create_address_space()
-    #
-    #     # 3. Получаем Objects node ПОСЛЕ старта
-    #     objects_node = self.opc_server.server.get_objects_node()
-    #     self.logger.info(f"Objects node: {objects_node.nodeid if objects_node else 'None'}")
-    #     # Реестр команд
-    #     self.opc_command_registry = OpcCommandRegistry(self.db)
-    #
-    #     # # Исполнитель команд
-    #     self.opc_command_receiver = OpcCommandReceiver(
-    #         db=self.db,
-    #         command_handlers=self._get_command_handlers(),
-    #         queue_size=self.config.get('commands.queue_size', 100),
-    #         poll_interval_sec=self.config.get('commands.poll_interval_sec', 2),
-    #         worker_threads=self.config.get('commands.worker_threads', 1)
-    #     )
-    #
-    #
-    #     # Hot-reload
-    #     self.command_reload = CommandHotReload(
-    #         db=self.db,
-    #         opc_server=self.opc_server,
-    #         registry=self.opc_server.opc_command_registry,
-    #         check_interval_sec=self.config.get('hot_reload.interval_sec', 30)
-    #     )
-    #
-    #     # Первоначальная загрузка команд
-    #     self._load_commands_initial()
-    #
-    #     self.opc_command_receiver.start()
-    #
-    #     if self.config.get('hot_reload.enabled', False):
-    #         self.command_reload.start()
-    #     else:
-    #         self.logger.info("ℹ️ Hot Reload отключен в конфигурации")
-    #
-    #     self.logger.info("Инициализация завершена")
+        self.logger.info("🏁 Все ресурсы освобождены")
 
-    # def _get_command_handlers(self) -> dict:
-    #     """Возвращает словарь обработчиков команд"""
-    #     return {
-    #         'REBOOT': self._handle_reboot,
-    #         'SET_CONFIG': self._handle_set_config,
-    #         'CLEAR_ALARM': self._handle_clear_alarm,
-    #     }
+        # ✅ 5. Принудительный выход (гарантированно завершит процесс)
+        self.logger.info("🚪 Выход из процесса...")
+
+        # Flush логов перед выходом
+        for handler in self.logger.handlers:
+            handler.flush()
+        # noinspection PyProtectedMember
+        # noinspection PyUnresolvedReferences
+        # ✅ Жёсткий выход (игнорирует активные потоки)
+        os._exit(0)
 
     def _load_commands_initial(self) -> None:
         """Первоначальная загрузка команд"""
@@ -336,9 +308,6 @@ class OPCApp:
             config=self.config.get('commands', {})
         )
         self.command_executor.start()
-        # pass
-
-    # core/app.py
 
     def _main_loop(self) -> None:
         """Главный цикл обработки событий"""
@@ -355,6 +324,7 @@ class OPCApp:
         last_update = 0
 
         while self._running:
+            # self.logger.info(f"🛑 _running={self._running}")
             try:
                 # ✅ Проверить уведомления (с коротким таймаутом)
                 if select.select([self.db.conn], [], [], poll_timeout)[0]:
@@ -386,29 +356,6 @@ class OPCApp:
                 self.logger.error(f"❌ Ошибка в главном цикле: {e}", exc_info=True)
                 # ✅ Не выходить при ошибке, продолжить работу
                 time.sleep(1)
-    # def _main_loop(self) -> None:
-    #     """Главный цикл обработки событий"""
-    #     import select
-    #     import time
-    #
-    #     poll_timeout = self.config.get('polling.notify_timeout_sec', 5)
-    #     update_interval = self.config.get('polling.update_interval_sec', 5)
-    #
-    #     while self._running:
-    #         try:
-    #             # ✅ Проверить состояние сервера
-    #             if select.select([self.db.conn], [], [], poll_timeout)[0]:
-    #                 self.db.poll_notifications()
-    #                 for channel in self.db.conn.notifies:
-    #                     self.db.conn.notifies.remove(channel)
-    #                     self._handle_notification(channel)
-    #             else:
-    #                 self.opc_server.update_telemetry()
-    #                 time.sleep(0.1)
-    #         except Exception as e:
-    #             self.logger.error(f"Ошибка в главном цикле: {e}")
-    #             # ✅ Пауза
-    #             time.sleep(1)
 
     def _handle_notification(self, notify) -> None:
         """
@@ -418,43 +365,58 @@ class OPCApp:
             notify: psycopg2.extensions.notify объект
         """
         # ✅ Извлечь alias из канала уведомления
-        alias = notify.channel  # ← ← ← Это строка '79215851634-LV1'
+        channel = notify.channel  # ← ← ← Это строка '79215851634-LV1'
         payload = notify.payload
 
-        self.logger.debug(f"📬 NOTIFY: alias={alias}, payload={payload}")
+        self.logger.debug(f"📬 NOTIFY: channel={channel}, payload={payload}")
+        # ✅ 1. Уведомления телеметрии (существующая логика)
+        if channel in self.opc_server._telemetry_nodes:
+            # ✅ Если payload содержит данные (например, JSON)
+            if payload:
+                import json
+                try:
+                    data = json.loads(payload)
+                    self.logger.debug(f"📊 Данные из payload: {data}")
+                    # Можно использовать data для чего-то
+                except json.JSONDecodeError:
+                    self.logger.debug(f"📝 Payload не JSON: {payload}")
 
-        # ✅ Если payload содержит данные (например, JSON)
-        if payload:
-            import json
-            try:
-                data = json.loads(payload)
-                self.logger.debug(f"📊 Данные из payload: {data}")
-                # Можно использовать data для чего-то
-            except json.JSONDecodeError:
-                self.logger.debug(f"📝 Payload не JSON: {payload}")
+            self.opc_server.request_update(channel)  # ← ← ← Безопасно!
+            return
 
-        # # ✅ Передать alias в update_parameter
-        # self.opc_server.update_parameter(alias)
-        # ✅ НЕ вызывать update_parameter() напрямую!
-        # Вместо этого — добавить в очередь
-        self.opc_server.request_update(alias)  # ← ← ← Безопасно!
-    # def _shutdown(self) -> None:
-    #     """Корректное завершение работы"""
-    #     self.logger.info("Завершение работы...")
-    #
-    #     if self.opc_command_receiver:
-    #         self.opc_command_receiver.stop()
-    #
-    #     if self.command_reload:
-    #         self.command_reload.stop()
-    #
-    #     if self.opc_server:
-    #         self.opc_server.stop()
-    #
-    #     if self.db:
-    #         self.db.close()
-    #
-    #     if self.command_executor:
-    #         self.command_executor.stop()
-    #
-    #     self.logger.info("Работа завершена")
+        # ✅ ✅ ✅ 2. Уведомления об изменениях пользователей
+        if channel == 'opc_user_change':
+            self._handle_user_change(payload)
+            return
+
+        # ✅ 3. Другие каналы...
+        self.logger.debug(f"⚠️ Неизвестный канал: {channel}")
+
+    def _handle_user_change(self, payload: str) -> None:
+        """
+        Обработать уведомление об изменении пользователей
+
+        Args:
+            payload: JSON строка от триггера
+        """
+        import json
+
+        try:
+            # ✅ Распарсить payload
+            data = json.loads(payload)
+            action = data.get('action', 'unknown')
+            username = data.get('username', 'unknown')
+
+            self.logger.info(f"🔄 Изменение пользователей: {action.upper()} {username}")
+
+            # ✅ Перезагрузить кэш пользователей
+            if hasattr(self, 'user_manager') and self.user_manager:
+                self.user_manager.reload_users()
+                self.logger.info(f"✅ Кэш пользователей обновлён")
+            else:
+                self.logger.warning("⚠️ user_manager не доступен для reload")
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"❌ Ошибка парсинга payload: {e}")
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка обработки user_change: {e}", exc_info=True)

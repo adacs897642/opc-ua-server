@@ -45,6 +45,8 @@ class Database:
             self._schema_validated = self._schema_report.get('is_valid', False)
         else:
             self.logger.warning("⚠️ Валидация схемы отключена")
+        # ✅ ✅ ✅ Подписаться на канал opc_user_change
+        self._listen_to_opc_users()
 
     def _connect(self) -> None:
         """Устанавливает соединение с БД"""
@@ -200,6 +202,22 @@ class Database:
         except Exception as e:
             logger.error(f"Ошибка LISTEN {channel}: {e}")
             return False
+
+    def _listen_to_opc_users(self):
+        """Подписаться на уведомления об изменениях пользователей"""
+        try:
+            # ✅ Важно: autocommit=True для LISTEN/NOTIFY
+            self.conn.set_session(autocommit=True)
+
+            with self.conn.cursor() as cursor:
+                cursor.execute("LISTEN opc_user_change;")
+                self.conn.commit()
+
+            self.logger.info("✅ Подписка на канал: opc_user_change")
+
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка подписки на opc_user_change: {e}")
+            # ✅ Не блокировать запуск приложения
 
     def close(self) -> None:
         """Закрывает соединение"""

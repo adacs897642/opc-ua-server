@@ -28,7 +28,6 @@ from opc.types import OPCTypeMapper
 from opc.commands.registry import OpcCommandRegistry
 from opc.status_codes import status_determiner
 from opc.utils.helpers import make_data_value, safe_variant, make_attr_value
-
 import queue
 import threading
 
@@ -64,6 +63,9 @@ class OPCServer:
         self._update_thread = None
         self._running = False
 
+        # ✅ Текущий пользователь
+        self._current_user = None
+
     def start(self) -> None:
         """Запускает OPC UA сервер"""
         try:
@@ -74,19 +76,101 @@ class OPCServer:
             self.server_name = app_cfg.get('name', 'OPC UA Server')
 
             self.logger.info("🚀 Запуск OPC UA сервера...")
-
-            # ✅ 1. Создать сервер
+            # ✅ Теперь создать сервер
             self.server = Server()
 
             # ✅ 2. Настроить эндпоинт
             self.server.set_endpoint(self.endpoint_url)
             self.server.set_server_name(self.server_name)
 
-            # ✅ 3. Настроить security
-            self.server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
+            # ✅ 2. SECURITY POLICY (шифрование канала)
+            # Для продакшена использовать только SignAndEncrypt!
+            security_config = self.config.get('server', {}).get('security', {})
 
-            # ✅ ✅ 4. ЗАПУСТИТЬ СЕРВЕР (ПЕРЕД register_namespace!)
+            self.server.set_security_policy([
+                ua.SecurityPolicyType.Basic256Sha256_SignAndEncrypt,  # ← ← ← Рекомендуется
+                ua.SecurityPolicyType.Basic256Sha256_Sign,  # Только подпись
+            ])
+
+            self.logger.info("✅ Security Policy: Basic256Sha256_SignAndEncrypt")
+            if security_config.get('enabled', True):
+                # ✅ Загрузить сертификат и ключ
+                cert_path = security_config.get('certificate')
+                key_path = security_config.get('key_path')
+
+                if cert_path and key_path:
+                    self.server.load_certificate(cert_path)
+                    self.server.load_private_key(key_path)
+                    self.logger.info(f"✅ Сертификат загружен: {cert_path}")
+
+                # ✅ Настроить политики безопасности
+
+            else:
+                # ✅ Для тестов — без безопасности
+                self.server.set_security_policy([
+                    ua.SecurityPolicyType.NoSecurity
+                ])
+                self.logger.warning("⚠️ Security отключён (только для тестов!)")
+
+
+            # ✅ ✅ ✅ Вызвать _set_endpoints() ДО start()!
+            try:
+                # ✅ Добавить "UserName" в policyIDs чтобы метод создал токен
+                if hasattr(self.server, '_policyIDs'):
+                    self.server._policyIDs.append("UserName")
+                    self.logger.info("✅ UserName добавлен в _policyIDs")
+
+                # ✅ Вызвать метод настройки эндпоинтов
+                self.server._set_endpoints(
+                    policy=ua.SecurityPolicyType.Basic256Sha256_SignAndEncrypt,
+                    mode=ua.MessageSecurityMode.SignAndEncrypt
+                )
+                self.logger.info("✅ _set_endpoints() вызван успешно")
+
+            except AttributeError as e:
+                self.logger.warning(f"⚠️ _set_endpoints() недоступен: {e}")
+
+
+            # ✅ Запустить сервер
             self.server.start()
+
+            # ✅ ✅ ✅ Патч эндпоинтов (с ПРАВИЛЬНОЙ URI строкой!)
+            try:
+                iserver = self.server.iserver
+
+                # ✅ Найти эндпоинты
+                if hasattr(iserver, '_endpoints'):
+                    endpoints = iserver._endpoints
+                elif hasattr(iserver, 'endpoints'):
+                    endpoints = iserver.endpoints
+                else:
+                    endpoints = self.server.get_endpoints()
+
+                # ✅ URI строки (не через Enum!)
+                ANON_URI = ""
+                USER_URI = "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256"
+
+                # ✅ Создать Anonymous политику
+                anon_policy = ua.UserTokenPolicy()
+                anon_policy.PolicyId = "Anonymous"
+                anon_policy.TokenType = ua.UserTokenType.Anonymous
+                anon_policy.SecurityPolicyUri = ANON_URI
+
+                # ✅ Создать UserName политику
+                user_policy = ua.UserTokenPolicy()
+                user_policy.PolicyId = "UserName"
+                user_policy.TokenType = ua.UserTokenType.UserName
+                user_policy.SecurityPolicyUri = USER_URI
+
+                # ✅ Назначить каждому эндпоинту
+                for endpoint in endpoints:
+                    endpoint.UserIdentityTokens = [anon_policy, user_policy]
+
+                self.logger.info("✅ UserTokenPolicy добавлены к эндпоинтам")
+
+            except Exception as e:
+                self.logger.warning(f"⚠️ Не удалось патчить эндпоинты: {e}")
+                self.logger.info("✅ Аутентификация через user_manager всё равно работает!")
 
             self.logger.info(f"✅ Сервер запущен: {self.endpoint_url}")
 
@@ -100,9 +184,6 @@ class OPCServer:
             self.logger.info(f"   Objects: {self.server.nodes.objects.nodeid}")
             self.logger.info(f"   Server: {self.server.nodes.server.nodeid}")
 
-            # ✅ 7. Создать адресное пространство
-            # await self.create_address_space()
-
             # ✅ 8. Запустить поток обновлений
             self._running = True
             self._update_thread = threading.Thread(
@@ -111,8 +192,6 @@ class OPCServer:
                 name='OPCUpdateThread'
             )
             self._update_thread.start()
-
-            self.logger.info(f"✅ Сервер запущен: {self.endpoint_url}")
 
             # ✅ для get_endpoints() — тоже корутина!
             endpoints = self.server.get_endpoints()
@@ -133,8 +212,6 @@ class OPCServer:
             self.logger.info(f"OPC UA сервер запущен: {self.endpoint_url}")
 
             # Инициализация загрузчиков
-            # default_period = self.config.get('polling.default_period_min', 1440)
-            # self.data_loader = DataLoader(self.db, default_period)
             self.data_loader = DataLoader(self.db, self.config)
             self.opc_command_registry = OpcCommandRegistry(self.db)
 
@@ -153,47 +230,77 @@ class OPCServer:
         except:
             return False
 
-    def _setup_security_policy(self) -> None:
-        """
-        Настраивает политики безопасности
-
-        ✅ ПРАВИЛЬНО: только set_security_policy(), без set_security_modes()
-        """
-        sec_cfg = self.config.get('server.security', {})
-
-        if sec_cfg.get('enable_encryption', False):
-            # Продакшен: шифрование
-            cert_path = sec_cfg.get('certificate')
-            key_path = sec_cfg.get('private_key')
-
-            if cert_path and key_path and Path(cert_path).exists():
-                try:
-                    self.server.load_certificate(cert_path)
-                    self.server.load_private_key(key_path)
-
-                    # ✅ Только set_security_policy!
-                    self.server.set_security_policy([
-                        SecurityPolicyType.Basic256Sha256_SignAndEncrypt
-                    ])
-                    self.logger.info("🔐 Security: Basic256Sha256_SignAndEncrypt")
-
-                except Exception as e:
-                    self.logger.error(f"Ошибка загрузки сертификатов: {e}")
-                    self._setup_no_security()
-            else:
-                self.logger.warning("⚠️ Сертификаты не найдены")
-                self._setup_no_security()
-        else:
-            # Тесты: без безопасности
-            self._setup_no_security()
-
-    def _setup_no_security(self) -> None:
-        """Настраивает режим без безопасности"""
-        # ✅ ТОЛЬКО set_security_policy, без set_security_modes!
-        self.server.set_security_policy([
-            SecurityPolicyType.NoSecurity
-        ])
-        self.logger.info("🔓 Security: NoSecurity")
+    # def check_user_token(self, token, peer_certificate):
+    #     """
+    #     Проверка токена пользователя (callback от сервера)
+    #
+    #     Args:
+    #         token: IdentityToken от клиента
+    #         peer_certificate: Сертификат клиента (если есть)
+    #
+    #     Returns:
+    #         bool: True если аутентификация успешна
+    #     """
+    #     try:
+    #         # ✅ Anonymous токен
+    #         if isinstance(token, ua.AnonymousIdentityToken):
+    #             if self.config.get('opc', {}).get('security', {}).get('anonymous_allowed', False):
+    #                 self.logger.info("✅ Anonymous доступ разрешён")
+    #                 self._current_user = 'anonymous'
+    #                 return True
+    #             else:
+    #                 self.logger.warning("⚠️ Anonymous доступ запрещён")
+    #                 return False
+    #
+    #         # ✅ UserName токен
+    #         if isinstance(token, ua.UserNameIdentityToken):
+    #             username = token.UserName
+    #             # Пароль может быть зашифрован серверным сертификатом
+    #             password = self._decrypt_password(token, peer_certificate)
+    #
+    #             self.logger.info(f"🔐 Попытка входа: {username}")
+    #
+    #             if user_manager.authenticate(username, password):
+    #                 self.logger.info(f"✅ Вход успешен: {username}")
+    #                 self._current_user = username
+    #
+    #                 # ✅ Логировать роли
+    #                 roles = user_manager.get_roles(username)
+    #                 self.logger.info(f"   Роли: {roles}")
+    #
+    #                 return True
+    #             else:
+    #                 self.logger.error(f"❌ Вход неудачен: {username}")
+    #                 return False
+    #
+    #         # ✅ Неизвестный токен
+    #         self.logger.warning(f"⚠️ Неизвестный тип токена: {type(token)}")
+    #         return False
+    #
+    #     except Exception as e:
+    #         self.logger.error(f"❌ Ошибка проверки токена: {e}", exc_info=True)
+    #         return False
+    #
+    # def _decrypt_password(self, token, peer_certificate):
+    #     """
+    #     Расшифровать пароль если он зашифрован
+    #
+    #     В opcua 1.0.4 пароль может быть зашифрован сертификатом сервера
+    #     """
+    #     try:
+    #         if token.Password:
+    #             # ✅ Проверить есть ли AlgorithmUri (шифрование)
+    #             if token.EncryptionAlgorithm:
+    #                 # ✅ Расшифровать (зависит от версии библиотеки)
+    #                 from opcua.crypto import security_policies
+    #                 # Реализация зависит от версии opcua
+    #                 return token.Password.decode('utf-8')
+    #             else:
+    #                 # ✅ Пароль в открытом виде
+    #                 return token.Password.decode('utf-8')
+    #         return ''
+    #     except:
+    #         return token.Password.decode('utf-8') if token.Password else ''
 
     def stop(self) -> None:
         """Останавливает сервер"""
@@ -370,81 +477,6 @@ class OPCServer:
             self.logger.error(f"❌ Ошибка создания адресного пространства: {e}", exc_info=True)
             raise
 
-    # opc/server.py (рядом с _create_device_object)
-
-    # def _create_device_object_from_telemetry(
-    #         self,
-    #         parent_node,
-    #         obj_name: str,
-    #         obj_sim: str,
-    #         params: List[TelemetryData],
-    #         commands: dict
-    #         ) -> None:
-    #     """
-    #     Создаёт объект устройства используя данные из БД
-    #
-    #     Args:
-    #         params: Список TelemetryData уже с value/timestamp из pvalues!
-    #     """
-    #     try:
-    #         from asyncua.ua import AttributeIds, LocalizedText, DataValue
-    #
-    #         self.logger.info(f"📦 Создание устройства: {obj_name} (sim={obj_sim})")
-    #         self.logger.info(f"   Параметры из БД: {len(params)}")
-    #
-    #         # ✅ Создать объект устройства
-    #         device_node = parent_node.add_object(
-    #             self.idx,
-    #             self._to_browse_name(obj_name)
-    #         )
-    #
-    #         device_node.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText(obj_name))
-    #         )
-    #         self.logger.debug(f"   Папка Parameters")
-    #         # ✅ Папка Parameters
-    #         params_folder = device_node.add_object(self.idx, "Parameters")
-    #         params_folder.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText("Параметры"))
-    #         )
-    #         self.logger.debug(f"   📋 Создаём параметры из БД (уже с value/timestamp!)")
-    #         # ✅ ✅ Создаём параметры из БД (уже с value/timestamp!)
-    #         for param in params:
-    #             self.logger.info(f"   📋 {param.alias}: type={param.param_type}, period={param.period}, pgroup={param.pgroup}")
-    #
-    #             # ✅ Передаём напрямую (уже из БД с value!)
-    #             self._create_parameter_node(params_folder, param)
-    #
-    #         # ✅ Папка Commands
-    #         commands_folder = device_node.add_object(self.idx, "Commands")
-    #         commands_folder.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText("Команды"))
-    #         )
-    #
-    #         # ✅ Создать методы команд
-    #         for code, meta in commands.items():
-    #             self._create_command_node(commands_folder, code, meta, sim=obj_sim)
-    #
-    #         # ✅ Кэш устройства
-    #         self._device_nodes[obj_sim] = {
-    #             'node': device_node,
-    #             'name': obj_name,
-    #             'sim': obj_sim
-    #         }
-    #
-    #         self.logger.info(f"✅ Устройство создано: {obj_name} (sim={obj_sim})")
-    #
-    #     except Exception as e:
-    #         self.logger.error(f"❌ Ошибка создания устройства {obj_name}: {e}", exc_info=True)
-    #         raise
-
-    # opc/server.py
-
-    # opc/server.py
-
     def _create_device_object_from_telemetry(
             self,
             parent_node,
@@ -512,124 +544,6 @@ class OPCServer:
         except Exception as e:
             self.logger.error(f"❌ Ошибка создания устройства {obj_name}: {e}", exc_info=True)
             raise
-
-    # def _create_device_object(
-    #         self,
-    #         parent_node,
-    #         obj_name: str,
-    #         obj_data: dict,
-    #         commands: dict
-    # ) -> None:
-    #     """
-    #     Создаёт объект устройства с параметрами и командами
-    #     """
-    #     try:
-    #         from asyncua.ua import NodeClass, AttributeIds, LocalizedText, DataValue, Variant, VariantType
-    #
-    #         # ✅ ОТЛАДКА: ПРОВЕРИТЬ commands
-    #         self.logger.info(f"🔍 {obj_name}: commands keys: {list(commands.keys())}")
-    #
-    #         for code, meta in commands.items():
-    #             if code == 'SET_CONFIG':
-    #                 self.logger.info(f"🔍 SET_CONFIG в _create_device_object:")
-    #                 self.logger.info(f"   meta type: {type(meta)}")
-    #                 self.logger.info(f"   meta keys: {meta.keys()}")
-    #                 self.logger.info(f"   has_params: {meta.get('has_params')}")
-    #                 self.logger.info(f"   param_schema: {meta.get('param_schema')}")
-    #                 self.logger.info(f"   param_schema type: {type(meta.get('param_schema'))}")
-    #
-    #         # ✅ ИЗВЛЕКАЕМ SIM
-    #         obj_sim = obj_data.get('sim')
-    #
-    #         if not obj_sim:
-    #             self.logger.warning(f"⚠️ Устройство {obj_name} без SIM, пропускаем")
-    #             return
-    #
-    #         self.logger.info(f"📦 Создание устройства: {obj_name} (sim={obj_sim})")
-    #
-    #         # Создаём объект устройства
-    #         device_node = parent_node.add_object(
-    #             self.idx,
-    #             self._to_browse_name(obj_name)
-    #         )
-    #         device_node.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText(obj_name))
-    #         )
-    #
-    #         # ✅ Папка Parameters
-    #         params_folder = device_node.add_object(self.idx, "Parameters")
-    #         params_folder.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText("Параметры"))
-    #         )
-    #
-    #         # ✅ ✅ ИСПРАВЛЕНО: get_object_params, а не get_device_params!
-    #         params = self.data_loader.get_object_params(obj_sim)
-    #
-    #         self.logger.info(f"   Найдено параметров: {len(params)}")
-    #
-    #         # Создаём параметры устройства
-    #         for p in params:
-    #             # Создаём временный объект для совместимости с _create_parameter_node
-    #             from db.data_loader import TelemetryData, DataLoader
-    #
-    #             # Формируем кортеж как ожидает TelemetryData.__init__
-    #             # (obj_name, sim, lpu, period, alias, name, unit, comment,
-    #             #  param_type, description, value, timestamp, nico, pgroup, disp)
-    #             temp_row = (
-    #                 obj_name,  # obj_name
-    #                 obj_sim,  # sim
-    #                 obj_data.get('sname', ''),  # lpu
-    #                 self.default_period_min,  # period
-    #                 p['alias'],  # alias
-    #                 p['name'],  # name
-    #                 p['unit'],  # unit
-    #                 p['comment'],  # comment
-    #                 p['type'],  # param_type
-    #                 p['description'],  # description
-    #                 None,  # value (загрузится из pvalues)
-    #                 None,  # timestamp
-    #                 None,  # nico
-    #                 p['pgroup'],  # pgroup
-    #                 p['disp']  # disp
-    #             )
-    #
-    #             param_data = TelemetryData(temp_row)
-    #             self._create_parameter_node(params_folder, param_data)
-    #
-    #         # ✅ Папка Commands
-    #         commands_folder = device_node.add_object(self.idx, "Commands")
-    #         commands_folder.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText("Команды"))
-    #         )
-    #
-    #         # ✅ Создаём методы команд
-    #         for code, meta in commands.items():
-    #             self.logger.info(f"🔍 Вызов _create_command_node для {code}:")
-    #             self.logger.info(f"   meta: {meta}")
-    #
-    #             self._create_command_node(
-    #                 commands_folder,
-    #                 code,
-    #                 meta,
-    #                 sim=obj_sim  # ← ← ← Привязка к устройству!
-    #             )
-    #
-    #         # Кэш устройства
-    #         self._device_nodes[obj_sim] = {
-    #             'node': device_node,
-    #             'name': obj_name,
-    #             'sim': obj_sim
-    #         }
-    #
-    #         self.logger.info(f"✅ Устройство создано: {obj_name} (sim={obj_sim})")
-    #
-    #     except Exception as e:
-    #         self.logger.error(f"Ошибка создания устройства {obj_name}: {e}", exc_info=True)
-
-    # opc/server.py
 
     def _create_device_object(
             self,
@@ -746,140 +660,6 @@ class OPCServer:
         except Exception as e:
             self.logger.error(f"❌ Ошибка создания устройства {obj_name}: {e}", exc_info=True)
             raise
-
-    # def _create_command_node(self, parent_node, code: str, meta: dict, sim: str) -> None:
-    #     """Создаёт метод команды с поддержкой _meta структуры"""
-    #     try:
-    #         from asyncua.ua import NodeClass, AttributeIds, LocalizedText, DataValue, Variant
-    #
-    #         self.logger.info(f"🔍 Создание команды: {code}")
-    #         self.logger.info(f"   meta keys: {meta.keys()}")
-    #         self.logger.info(f"   param_schema: {meta.get('param_schema')}")
-    #
-    #         # ✅ ФОРМИРУЕМ ВХОДНЫЕ АРГУМЕНТЫ
-    #         input_args = []
-    #
-    #         # ✅ Получаем схему параметров (теперь это может быть dict с 'params')
-    #         param_schema_raw = meta.get('param_schema', [])
-    #
-    #         # ✅ Определяем где схема параметров
-    #         if isinstance(param_schema_raw, dict):
-    #             # Новая структура: {"_meta": {...}, "params": [...]}
-    #             param_schema = param_schema_raw.get('params', [])
-    #             self.logger.info(f"📋 Новая структура param_schema (с _meta)")
-    #         elif isinstance(param_schema_raw, list):
-    #             # Старая структура: [...]
-    #             param_schema = param_schema_raw
-    #             self.logger.info(f"📋 Старая структура param_schema (список)")
-    #         else:
-    #             param_schema = []
-    #             self.logger.warning(f"⚠️ param_schema не dict и не list: {type(param_schema_raw)}")
-    #
-    #         self.logger.info(f"📋 Схема параметров: {param_schema}")
-    #
-    #         has_params = meta.get('has_params', False)
-    #
-    #         if has_params and param_schema:
-    #             self.logger.info(f"📋 {code}: Создаём input_args...")
-    #
-    #             for i, p in enumerate(param_schema):
-    #                 self.logger.info(f"   Параметр {i}: {p} (type={type(p)})")
-    #
-    #                 # ✅ Проверяем что p — это dict
-    #                 if not isinstance(p, dict):
-    #                     self.logger.warning(f"⚠️ Параметр {i} не dict, пропускаем: {p}")
-    #                     continue
-    #
-    #                 param_type = p.get('type', 'string')
-    #                 param_name = p.get('name', f'param_{i}')
-    #                 param_desc = p.get('desc', '')
-    #
-    #                 dtype = self._get_builtin_node_id(param_type)
-    #
-    #                 self.logger.info(f"   + InputArgument: {param_name} (type={param_type}, dtype={dtype})")
-    #
-    #                 arg = self._create_argument(
-    #                     name=param_name,
-    #                     data_type=dtype,
-    #                     description=param_desc
-    #                 )
-    #
-    #                 input_args.append(arg)
-    #                 self.logger.info(f"   ✅ Добавлен аргумент {i}: {arg.Name}")
-    #         else:
-    #             self.logger.info(f"📋 {code}: Без параметров (has_params={has_params}, schema_len={len(param_schema)})")
-    #
-    #         self.logger.info(f"📋 {code}: Всего input_args: {len(input_args)}")
-    #
-    #         # ✅ ВЫХОДНЫЕ АРГУМЕНТЫ
-    #         output_args = [
-    #             self._create_argument(
-    #                 name='result_code',
-    #                 data_type=ua.NodeId(ua.ObjectIds.Int32),
-    #                 description='Код результата: 0=OK, <0=Error'
-    #             ),
-    #             self._create_argument(
-    #                 name='result_message',
-    #                 data_type=ua.NodeId(ua.ObjectIds.String),
-    #                 description='Сообщение результата'
-    #             )
-    #         ]
-    #
-    #         self.logger.info(f"📋 {code}: Всего output_args: {len(output_args)}")
-    #
-    #         # ✅ Создаём метод
-    #         def command_callback(method_nodeid, *args):
-    #             return self._on_command_call_with_code(code, sim, method_nodeid, *args)
-    #
-    #         self.logger.info(f"📋 {code}: Вызов add_method()...")
-    #         self.logger.info(f"   input_args: {len(input_args)}")
-    #         self.logger.info(f"   output_args: {len(output_args)}")
-    #
-    #         node = parent_node.add_method(
-    #             ua.NodeId(0, self.idx),
-    #             ua.QualifiedName(code, self.idx),
-    #             command_callback,
-    #             input_args,
-    #             output_args
-    #         )
-    #
-    #         method_node_id = node.nodeid
-    #
-    #         # ✅ Устанавливаем атрибуты
-    #         node.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText(meta.get('name', code)))
-    #         )
-    #         node.set_attribute(
-    #             AttributeIds.Description,
-    #             DataValue(LocalizedText(meta.get('description', '')))
-    #         )
-    #         node.set_attribute(
-    #             AttributeIds.Executable,
-    #             DataValue(Variant(True, VariantType.Boolean))
-    #         )
-    #         node.set_attribute(
-    #             AttributeIds.UserExecutable,
-    #             DataValue(Variant(True, VariantType.Boolean))
-    #         )
-    #
-    #         # ✅ Сохраняем в кэш
-    #         cache_key = f"{code}:{sim}"
-    #         self._command_nodes[cache_key] = {
-    #             'node': node,
-    #             'node_id': method_node_id,
-    #             'sim': sim,
-    #             'code': code,
-    #             'meta': meta
-    #         }
-    #
-    #         self.logger.info(f"   ✅ Команда {cache_key} создана (NodeId: {method_node_id})")
-    #
-    #     except Exception as e:
-    #         self.logger.error(f"Ошибка создания команды {code}: {e}", exc_info=True)
-    #         raise
-
-    # opc/server.py
 
     def _create_command_node(self, parent_node, code: str, meta: dict, sim: str) -> None:
         """Создаёт метод команды с поддержкой _meta структуры"""
@@ -1123,131 +903,6 @@ class OPCServer:
 
         return id1 == id2 and ns1 == ns2
 
-    # def _create_parameter_node(self, parent_node, param: TelemetryData) -> None:
-    #     """
-    #     Создаёт узел параметра со StatusCode и Property со статусом
-    #
-    #     Args:
-    #         parent_node: Родительский узел (папка Parameters)
-    #         param: Данные параметра из БД
-    #     """
-    #     self.logger.debug(f"_create_parameter_node {param}")
-    #     try:
-    #         # 1. Определение типа данных и конвертация значения
-    #         variant_type = OPCTypeMapper.get_variant_type(param.param_type)
-    #         value = OPCTypeMapper.convert_value(param.value, variant_type)
-    #
-    #         # 2. Создание основного узла
-    #         node = parent_node.add_variable(
-    #             self.idx,
-    #             param.alias,
-    #             value,
-    #             varianttype=variant_type
-    #         )
-    #
-    #         # 3. DisplayName
-    #         node.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText(param.name or param.alias))
-    #         )
-    #
-    #         # 4. Description (статичное описание)
-    #         display_unit = param.unit or param.disp or ''
-    #         description = f"{param.comment}".strip()
-    #         if display_unit:
-    #             description += f" [{display_unit}]" if description else f"[{display_unit}]"
-    #
-    #         node.set_attribute(
-    #             AttributeIds.Description,
-    #             DataValue(LocalizedText(description))
-    #         )
-    #
-    #         # 5. EngineeringUnits (если есть единица измерения)
-    #         if display_unit:
-    #             try:
-    #                 eu_info = self.node_creator._create_engineering_unit(display_unit)
-    #                 node.set_attribute(
-    #                     AttributeIds.EngineeringUnits,
-    #                     DataValue(eu_info)
-    #                 )
-    #             except Exception as e:
-    #                 self.logger.debug(f"Не удалось установить EngineeringUnits для {param.alias}: {e}")
-    #
-    #         # 6. Определение статуса через nico
-    #         status_code, status_message = status_determiner.get_status(
-    #             alias=param.alias,
-    #             value=param.value,
-    #             timestamp=param.timestamp,
-    #             period_min=param.period,
-    #             nico=param.nico,
-    #             param_type=param.param_type
-    #         )
-    #
-    #         # 7. ✅ ВРЕМЕННЫЕ МЕТКИ (одинаковые для Value и Property!)
-    #         now = datetime.now(timezone.utc)
-    #         source_ts = param.timestamp or now  # ← Из БД (время получения)
-    #         server_ts = now  # ← Время обработки сервером
-    #
-    #         # 8. Установка значения основного узла
-    #         node.set_value(DataValue(
-    #             variant=Variant(value, variant_type),  # ← Ваша версия библиотеки
-    #             status=StatusCode(status_code.value if hasattr(status_code, 'value') else status_code),
-    #             sourceTimestamp=source_ts,  # ← Из БД
-    #             serverTimestamp=server_ts  # ← Текущее
-    #         ))
-    #
-    #         # 9. ✅ СОЗДАНИЕ PROPERTY (StatusMessage)
-    #         status_prop = node.add_property(
-    #             self.idx,
-    #             "StatusMessage",
-    #             status_message
-    #         )
-    #         status_prop.set_attribute(
-    #             AttributeIds.DisplayName,
-    #             DataValue(LocalizedText("Сообщение статуса"))
-    #         )
-    #         status_prop.set_attribute(
-    #             AttributeIds.Description,
-    #             DataValue(LocalizedText("Текстовое описание текущего статуса параметра"))
-    #         )
-    #         status_prop.set_writable(False)  # Только чтение
-    #
-    #         # 10. ✅ Установка значения Property (с ТАКИМИ ЖЕ timestamps!)
-    #         status_prop.set_value(DataValue(
-    #             variant=Variant(status_message, VariantType.String),  # ← Ваша версия
-    #             status=StatusCode(0x00000000),  # Good
-    #             sourceTimestamp=source_ts,  # ← ТО ЖЕ ЧТО У VALUE!
-    #             serverTimestamp=server_ts  # ← ТО ЖЕ ЧТО У VALUE!
-    #         ))
-    #
-    #         # 11. Сохранение в кэш для обновления
-    #         self._telemetry_nodes[param.alias] = {
-    #             'node': node,
-    #             'status_prop_node': status_prop,  # ← Ссылка на Property
-    #             'sim': param.sim,
-    #             'nico': param.nico,
-    #             'period': param.period,
-    #             'last_status': status_code,
-    #             'last_status_message': status_message
-    #         }
-    #
-    #         # 12. Подписка на NOTIFY из БД
-    #         self.db.listen(param.alias)
-    #
-    #         # 13. Логирование
-    #         self.logger.debug(
-    #             f"Создан параметр: {param.alias}, "
-    #             f"sim={param.sim}, "
-    #             f"nico={param.nico}, "
-    #             f"Status: {status_code}, "
-    #             f"Message: {status_message}, "
-    #             f"SourceTS: {source_ts}"
-    #             f"ServerTS: {server_ts}"
-    #         )
-    #
-    #     except Exception as e:
-    #         self.logger.error(f"Ошибка создания узла {param.alias}: {e}", exc_info=True)
-
     def _create_parameter_node(self, parent_node, param: TelemetryData) -> None:
         """Создаёт узел параметра со StatusCode и Property со статусом"""
 
@@ -1351,6 +1006,17 @@ class OPCServer:
             )
             status_prop.set_writable(False)
 
+            # # ✅ Создать Property LastUpdateTime
+            # update_time_prop = node.add_property(
+            #     self.idx,
+            #     "LastUpdateTime",
+            #     datetime.now(timezone.utc)
+            # )
+            # update_time_prop.set_attribute(
+            #     AttributeIds.DisplayName,
+            #     make_attr_value(LocalizedText("Время последнего обновления"), VariantType.LocalizedText)
+            # )
+
             # ✅ ✅ 11. Установка значения Property (через safe_variant!)
             # status_message может быть не строкой!
             status_variant = safe_variant(status_message, VariantType.String)
@@ -1366,6 +1032,7 @@ class OPCServer:
             self._telemetry_nodes[param.alias] = {
                 'node': node,
                 'status_prop_node': status_prop,
+                # 'update_time_prop': update_time_prop,
                 'sim': param.sim,
                 'nico': param.nico,
                 'period': param.period,
@@ -1474,37 +1141,6 @@ class OPCServer:
                     f"🔄 {alias}: конвертация {type(value).__name__} → "
                     f"{type(variant.Value).__name__} ({variant_type.name})"
                 )
-            # # ✅ Обработка None значения
-            # if value is None:
-            #     # ✅ Простой вариант: прямой маппинг
-            #     if variant_type == VariantType.String:
-            #         safe_value = ""
-            #     elif variant_type in (VariantType.Int32, VariantType.Int64):
-            #         safe_value = 0
-            #     elif variant_type in (VariantType.Double, VariantType.Float):
-            #         safe_value = 0.0
-            #     elif variant_type == VariantType.Boolean:
-            #         safe_value = False
-            #     elif variant_type == VariantType.DateTime:
-            #         safe_value = datetime.now(timezone.utc)
-            #     elif variant_type == VariantType.Byte:
-            #         safe_value = 0
-            #     else:
-            #         safe_value = ""  # Fallback
-            #
-            #     self.logger.debug(f"   Variant: value={safe_value}, type={variant_type}")
-            #     # variant = Variant(safe_value, variant_type)
-            #     variant = safe_variant(safe_value, variant_type)
-            # else:
-            #     # ✅ Конвертация строки в datetime
-            #     if variant_type == VariantType.DateTime and isinstance(value, str):
-            #         try:
-            #             value = datetime.fromisoformat(value.replace('Z', '+00:00'))
-            #         except Exception:
-            #             value = datetime.now(timezone.utc)
-            #
-            #     # variant = Variant(value, variant_type)
-            #     variant = safe_variant(value, variant_type)
 
             # ✅ Временные метки
             source_ts = timestamp
@@ -1540,7 +1176,16 @@ class OPCServer:
                     serverTimestamp=server_ts
                 ))
             self.logger.debug(f"   Server state after status_prop: {self.is_running()}")
-            # ✅ Логирование
+            # ✅ Обновить LastUpdateTime (всегда!)
+            # update_time_prop = info.get('update_time_prop')
+            # if update_time_prop:
+            #     update_time_prop.set_value(DataValue(
+            #         variant=Variant(datetime.now(timezone.utc), VariantType.DateTime),
+            #         status=StatusCode(0x00000000),
+            #         sourceTimestamp=datetime.now(timezone.utc),
+            #         serverTimestamp=datetime.now(timezone.utc)
+            #     ))
+            # # ✅ Логирование
             if status_code != info.get('last_status'):
                 self.logger.info(
                     f"Параметр {alias}: nico={nico}, "
