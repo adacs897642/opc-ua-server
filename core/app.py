@@ -190,6 +190,33 @@ class OPCApp:
         """Инициализирует компоненты"""
         self.logger.info("Инициализация компонентов...")
 
+        validity_days = self.config._config.get('server', {}).get('security', {}).get('cert_validity_days', 365)
+        try:
+            validity_days = int(validity_days)
+        except (ValueError, TypeError):
+            validity_days = 365
+            self.logger.warning(f"⚠️ Неверный cert_validity_days, используем 365")
+
+        # ✅ ✅ ✅ ПРОВЕРИТЬ/СОЗДАТЬ СЕРТИФИКАТЫ ПЕРЕД ЗАПУСКОМ
+        # self.config = ConfigLoader('config.json')
+        from opc.cert_manager import CertManager
+        self.cert_manager = CertManager(
+            pki_dir=self.config._config.get('server', {}).get('security', {}).get('pki_dir', 'pki/own'),
+            common_name=self.config._config.get('server', {}).get('security', {}).get('server_name', 'opc-server.local'),
+            organization=self.config._config.get('server', {}).get('security', {}).get('organization', 'SystemX'),
+            validity_days=validity_days
+        )
+
+        if not self.cert_manager.ensure_certificates():
+            self.logger.error("❌ Не удалось создать/проверить сертификаты!")
+            raise RuntimeError("Certificate generation failed")
+
+        # ✅ Показать информацию о сертификате
+        cert_info = self.cert_manager.get_certificate_info()
+        self.logger.info(f"📋 Сертификат: {cert_info.get('subject')}")
+        self.logger.info(f"   Действует до: {cert_info.get('valid_to')}")
+        self.logger.info(f"   Осталось дней: {cert_info.get('days_left')}")
+
         # ✅ База данных
         self.db = Database(self.config.db_config)
 

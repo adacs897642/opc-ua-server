@@ -60,7 +60,7 @@ class UserManager:
         """Инициализировать solt для расшифровки"""
         self.solt = self.config.get('server', {}).get('security', {}).get('solt')
         if self.solt:
-            logger.info(f"✅ Ключ для расшифровки: {self.solt}")
+            logger.info(f"✅ Solt phrase для расшифровки есть")
         else:
             logger.warning("⚠️ Solt phrase не указан — расшифровка пароля не будет работать!")
 
