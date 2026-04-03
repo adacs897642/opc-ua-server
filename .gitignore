@@ -4,16 +4,22 @@ config.json
 config.local.json
 config.prod.json
 *.secret.json
+users.json
+
+# tests
+tests/
 
 # Логи
 logs/
 *.log
 
 # Сертификаты
-certs/
+pki/
 *.pem
 *.der
 *.key
+
+
 
 # Переменные окружения
 .env

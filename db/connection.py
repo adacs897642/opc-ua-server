@@ -101,6 +101,17 @@ class Database:
             if report['created_indexes']:
                 self.logger.info(f"📊 Создано индексов: {len(report['created_indexes'])}")
 
+            if not report['is_valid']:
+                self.logger.warning("⚠️ Схема БД не полностью валидна:")
+                if report['missing_tables']:
+                    self.logger.warning(f"   ❌ Таблицы: {report['missing_tables']}")
+                if report['trigger_functions']['missing']:
+                    self.logger.warning(f"   ❌ Функции: {report['trigger_functions']['missing']}")
+                if report['triggers']['missing']:
+                    self.logger.warning(f"   ❌ Триггеры: {report['triggers']['missing']}")
+            else:
+                self.logger.info("✅ Схема БД валидна")
+
             return report
 
         except Exception as e:

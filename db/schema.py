@@ -484,6 +484,42 @@ class SchemaValidator:
         # """,
     }
 
+    # ✅ ✅ ✅ НОВОЕ: Определения самих триггеров (привязка к таблицам)
+    TRIGGER_ATTACHMENTS = {
+        # ✅ Триггер для opc_users (наш новый!)
+        'trg_opc_user_change': {
+            'table': 'opc_users',
+            'sql': """
+                    DROP TRIGGER IF EXISTS trg_opc_user_change ON opc_users;
+                    CREATE TRIGGER trg_opc_user_change
+                    AFTER INSERT OR UPDATE OR DELETE ON opc_users
+                    FOR EACH ROW
+                    EXECUTE FUNCTION notify_opc_user_change();
+                """
+        },
+        # ✅ Триггер для телеметрии
+        'pvalues_ins_af': {
+            'table': 'pvalues',  # таблица телеметрии
+            'sql': """
+                    DROP TRIGGER IF EXISTS pvalues_ins_af ON pvalues;
+                    create trigger pvalues_ins_af after
+                    insert
+                        on
+                        pvalues for each row execute procedure calcspd();                    
+                """
+        },
+        'pvalues_ins_bf': {
+            'table': 'pvalues',  #  таблица телеметрии
+            'sql': """
+                        DROP TRIGGER IF EXISTS pvalues_ins_bf ON pvalues;                        
+                        create trigger pvalues_ins_bf before
+                        insert
+                            on
+                            pvalues for each row execute procedure newvalue();
+                    """
+        },
+    }
+
     def __init__(self, db_connection):
         # ✅ Принимаем connection напрямую, а не Database объект
         self.conn = db_connection
@@ -578,7 +614,7 @@ class SchemaValidator:
 
         return created
 
-    def check_triggers(self) -> Dict[str, bool]:
+    def check_trigger_functions(self) -> Dict[str, bool]:
         """Проверяет существование триггеров и функций"""
         result = {}
 
@@ -600,50 +636,172 @@ class SchemaValidator:
 
         return result
 
+    def check_triggers(self) -> dict:
+        """
+        Проверить какие триггеры существуют
+
+        Returns:
+            dict: {trigger_name: bool} — существует ли триггер
+        """
+        status = {}
+
+        try:
+            cursor = self.conn.cursor()
+
+            # ✅ Проверить каждый триггер из TRIGGER_ATTACHMENTS
+            for trigger_name, config in self.TRIGGER_ATTACHMENTS.items():
+                table_name = config['table']
+
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM pg_trigger 
+                        WHERE tgname = %s 
+                        AND tgrelid = %s::regclass
+                    )
+                """, (trigger_name, table_name))
+
+                exists = cursor.fetchone()[0]
+                status[trigger_name] = exists
+
+                if exists:
+                    self.logger.debug(f"✅ Триггер {trigger_name} на {table_name} существует")
+                else:
+                    self.logger.debug(f"⚠️ Триггер {trigger_name} на {table_name} отсутствует")
+
+            cursor.close()
+            return status
+
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка проверки триггеров: {e}")
+            return {name: False for name in self.TRIGGER_ATTACHMENTS}
+
     def create_triggers(self) -> List[str]:
-        """Создаёт отсутствующие функции"""
+        """
+        Создаёт отсутствующие функции И триггеры
+
+        Returns:
+            List[str]: Список созданных объектов (функции и триггеры)
+        """
         created = []
 
+        # ✅ 1. Создать функции триггеров (если нет)
+        self.logger.debug("🔧 Проверка функций триггеров...")
+        func_status = self.check_trigger_functions()
+
         for func_name, create_sql in self.TRIGGER_DEFINITIONS.items():
-            if self._execute(create_sql):
-                self.logger.info(f"✅ Функция {func_name} создана/обновлена")
-                created.append(func_name)
+            if not func_status.get(func_name, False):
+                if self._execute(create_sql):
+                    self.logger.info(f"✅ Функция {func_name} создана")
+                    created.append(f"func:{func_name}")
+            else:
+                self.logger.debug(f"✅ Функция {func_name} уже существует")
+
+        # ✅ 2. Создать триггеры (привязку к таблицам)
+        self.logger.debug("🔧 Проверка триггеров...")
+        trigger_status = self.check_triggers()
+
+        for trigger_name, config in self.TRIGGER_ATTACHMENTS.items():
+            if not trigger_status.get(trigger_name, False):
+                table_name = config['table']
+                create_sql = config['sql']
+
+                # ✅ Проверить что таблица существует перед созданием триггера
+                if not self._table_exists(table_name):
+                    self.logger.warning(f"⚠️ Таблица {table_name} не найдена, пропускаем триггер {trigger_name}")
+                    continue
+
+                if self._execute(create_sql):
+                    self.logger.info(f"✅ Триггер {trigger_name} на {table_name} создан")
+                    created.append(f"trigger:{trigger_name}")
+            else:
+                self.logger.debug(f"✅ Триггер {trigger_name} уже существует")
 
         return created
+
+    def _table_exists(self, table_name: str) -> bool:
+        """Проверить существует ли таблица"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = %s
+                )
+            """, (table_name,))
+            result = cursor.fetchone()[0]
+            cursor.close()
+            return result
+        except:
+            return False
+
+    # schema.py
 
     def validate_and_fix(self) -> dict:
         """Полная проверка и исправление схемы"""
         self.logger.info("🔍 Проверка схемы базы данных...")
 
+        # ✅ Таблицы
         tables_status = self.check_tables()
         missing_tables = [t for t, exists in tables_status.items() if not exists]
-
         created_tables = []
+
         if missing_tables:
             self.logger.warning(f"⚠️ Отсутствуют таблицы: {missing_tables}")
             self.logger.info("🔧 Создание отсутствующих таблиц...")
             created_tables = self.create_missing_tables()
 
+        # ✅ Индексы
         self.logger.info("🔧 Проверка индексов...")
         created_indexes = self.create_indexes()
 
-        self.logger.info("🔧 Проверка триггеров и функций...")
-        triggers_status = self.check_triggers()
-        created_triggers = self.create_triggers()
+        # ✅ ✅ ✅ Функции и триггеры
+        self.logger.info("🔧 Проверка функций триггеров...")
+        func_status = self.check_trigger_functions()
+        missing_funcs = [f for f, exists in func_status.items() if not exists]
 
+        self.logger.info("🔧 Проверка триггеров...")
+        trigger_status = self.check_triggers()
+        missing_triggers = [t for t, exists in trigger_status.items() if not exists]
+
+        created_objects = []
+        if missing_funcs or missing_triggers:
+            self.logger.info(
+                f"🔧 Создание отсутствующих объектов: функции={len(missing_funcs)}, триггеры={len(missing_triggers)}")
+            created_objects = self.create_triggers()
+
+        # ✅ Итоговый отчёт
         report = {
             'total_tables': len(self.REQUIRED_TABLES),
             'existing_tables': len([t for t, e in tables_status.items() if e]),
             'missing_tables': missing_tables,
             'created_tables': created_tables,
             'created_indexes': created_indexes,
-            'created_triggers': created_triggers,
-            'is_valid': len(missing_tables) == 0 or len(created_tables) == len(missing_tables)
+
+            # ✅ ✅ ✅ Новая информация по триггерам
+            'trigger_functions': {
+                'total': len(self.TRIGGER_DEFINITIONS),
+                'existing': len([f for f, e in func_status.items() if e]),
+                'missing': missing_funcs,
+            },
+            'triggers': {
+                'total': len(self.TRIGGER_ATTACHMENTS),
+                'existing': len([t for t, e in trigger_status.items() if e]),
+                'missing': missing_triggers,
+            },
+            'created_objects': created_objects,
+
+            # ✅ Валидность: все таблицы + все триггеры созданы
+            'is_valid': (
+                    len(missing_tables) == 0 and
+                    len(missing_funcs) == 0 and
+                    len(missing_triggers) == 0
+            )
         }
 
         if report['is_valid']:
             self.logger.info("✅ Схема базы данных валидна")
         else:
-            self.logger.error("❌ Ошибки при создании схемы базы данных")
+            self.logger.warning("⚠️ Схема базы данных требует внимания")
 
         return report
